@@ -62,6 +62,14 @@ Cookies:
   rodney cookie-delete <name> [opts]     Delete cookies by name
   rodney cookie-clear [--domain <dom>]    Clear all cookies (or just one domain)
 
+Emulation:
+  rodney ua <user-agent>            Override browser user agent string
+  rodney timezone <timezone-id>     Override timezone (e.g. "Asia/Tokyo")
+  rodney locale <locale>            Override locale (e.g. "de-DE")
+  rodney geo --lat N --lon N        Spoof geolocation coordinates
+  rodney media [--type T] [--feature name=value ...]
+                                    Emulate media type or features
+
 Accessibility:
   rodney ax-tree [--depth N] [--json]       Dump accessibility tree
   rodney ax-find [--name N] [--role R] [--json]  Find accessible nodes

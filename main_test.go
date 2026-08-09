@@ -923,10 +923,10 @@ func TestAssert_ValueFormatting_MatchesJSCommand(t *testing.T) {
 		expr     string
 		expected string
 	}{
-		{`document.title`, "Test Page"},   // string unquoted
-		{`1 + 2`, "3"},                    // number
-		{`true`, "true"},                  // boolean
-		{`null`, "null"},                  // null
+		{`document.title`, "Test Page"}, // string unquoted
+		{`1 + 2`, "3"},                  // number
+		{`true`, "true"},                // boolean
+		{`null`, "null"},                // null
 		{`document.querySelectorAll("button").length`, "2"}, // number from DOM
 	}
 
@@ -1147,6 +1147,320 @@ func TestParseStartArgs_UnknownFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--bogus") {
 		t.Errorf("error should mention the unknown flag, got: %v", err)
+	}
+}
+
+// ua (user agent) tests
+// =====================
+
+func TestUA_OverridesUserAgent(t *testing.T) {
+	page := navigateTo(t, "/")
+	newUA := "Googlebot/2.1 (+http://www.google.com/bot.html)"
+	err := applyUserAgent(page, newUA)
+	if err != nil {
+		t.Fatalf("applyUserAgent failed: %v", err)
+	}
+	// Reload so the new UA takes effect on the next request
+	page.MustReload()
+	page.MustWaitLoad()
+	// Check via JS that navigator.userAgent reflects the override
+	result, err := page.Eval(`() => navigator.userAgent`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	got := result.Value.Str()
+	if got != newUA {
+		t.Errorf("expected userAgent %q, got %q", newUA, got)
+	}
+}
+
+func TestUA_EmptyStringResetsToDefault(t *testing.T) {
+	page := navigateTo(t, "/")
+	// First get the default user agent
+	defaultResult, err := page.Eval(`() => navigator.userAgent`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	defaultUA := defaultResult.Value.Str()
+
+	// Override to something custom
+	err = applyUserAgent(page, "CustomBot/1.0")
+	if err != nil {
+		t.Fatalf("applyUserAgent failed: %v", err)
+	}
+	page.MustReload()
+	page.MustWaitLoad()
+
+	// Reset by setting empty UA (which should restore default behavior)
+	// The CDP spec says setting empty string resets to default
+	err = applyUserAgent(page, "")
+	if err != nil {
+		t.Fatalf("applyUserAgent with empty string failed: %v", err)
+	}
+	page.MustReload()
+	page.MustWaitLoad()
+
+	result, err := page.Eval(`() => navigator.userAgent`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	got := result.Value.Str()
+	if got == "CustomBot/1.0" {
+		t.Errorf("UA should have been reset, still got %q", got)
+	}
+	_ = defaultUA // default UA may or may not match exactly after reset
+}
+
+// =====================
+// timezone tests
+// =====================
+
+func TestTimezone_OverridesTimezone(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyTimezone(page, "Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("applyTimezone failed: %v", err)
+	}
+	// Check the timezone via JS
+	result, err := page.Eval(`() => Intl.DateTimeFormat().resolvedOptions().timeZone`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	got := result.Value.Str()
+	if got != "Asia/Tokyo" {
+		t.Errorf("expected timezone 'Asia/Tokyo', got %q", got)
+	}
+}
+
+func TestTimezone_DifferentTimezone(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyTimezone(page, "America/New_York")
+	if err != nil {
+		t.Fatalf("applyTimezone failed: %v", err)
+	}
+	result, err := page.Eval(`() => Intl.DateTimeFormat().resolvedOptions().timeZone`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	got := result.Value.Str()
+	if got != "America/New_York" {
+		t.Errorf("expected timezone 'America/New_York', got %q", got)
+	}
+}
+
+func TestTimezone_InvalidTimezoneReturnsError(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyTimezone(page, "Not/A/Real/Timezone")
+	if err == nil {
+		t.Error("expected error for invalid timezone, got nil")
+	}
+}
+
+// =====================
+// locale tests
+// =====================
+
+func TestLocale_OverridesLocale(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyLocale(page, "de-DE")
+	if err != nil {
+		t.Fatalf("applyLocale failed: %v", err)
+	}
+	result, err := page.Eval(`() => Intl.DateTimeFormat().resolvedOptions().locale`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	got := result.Value.Str()
+	if got != "de-DE" {
+		t.Errorf("expected locale 'de-DE', got %q", got)
+	}
+}
+
+func TestLocale_JapaneseLocale(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyLocale(page, "ja-JP")
+	if err != nil {
+		t.Fatalf("applyLocale failed: %v", err)
+	}
+	result, err := page.Eval(`() => Intl.DateTimeFormat().resolvedOptions().locale`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	got := result.Value.Str()
+	if got != "ja-JP" {
+		t.Errorf("expected locale 'ja-JP', got %q", got)
+	}
+}
+
+func TestLocale_EmptyStringResets(t *testing.T) {
+	page := navigateTo(t, "/")
+	// Override to German
+	err := applyLocale(page, "de-DE")
+	if err != nil {
+		t.Fatalf("applyLocale failed: %v", err)
+	}
+	// Reset by passing empty
+	err = applyLocale(page, "")
+	if err != nil {
+		t.Fatalf("applyLocale with empty string failed: %v", err)
+	}
+	// Should no longer be de-DE after reset
+	result, err := page.Eval(`() => Intl.DateTimeFormat().resolvedOptions().locale`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	got := result.Value.Str()
+	if got == "de-DE" {
+		t.Errorf("locale should have been reset from de-DE, still got %q", got)
+	}
+}
+
+// =====================
+// geo (geolocation) tests
+// =====================
+
+func TestGeo_OverridesGeolocation(t *testing.T) {
+	page := navigateTo(t, "/")
+	lat, lon := 48.8566, 2.3522 // Paris
+	err := applyGeolocation(page, lat, lon)
+	if err != nil {
+		t.Fatalf("applyGeolocation failed: %v", err)
+	}
+
+	// Grant geolocation permission first
+	err = (proto.BrowserGrantPermissions{
+		Permissions: []proto.BrowserPermissionType{"geolocation"},
+	}).Call(env.browser)
+	if err != nil {
+		t.Fatalf("grant permission failed: %v", err)
+	}
+
+	// Query position via JS
+	result, err := page.Eval(`() => new Promise((resolve, reject) => {
+		navigator.geolocation.getCurrentPosition(
+			pos => resolve({lat: pos.coords.latitude, lon: pos.coords.longitude}),
+			err => reject(err.message),
+			{timeout: 5000}
+		)
+	})`)
+	if err != nil {
+		t.Fatalf("geolocation query failed: %v", err)
+	}
+	gotLat := result.Value.Get("lat").Num()
+	gotLon := result.Value.Get("lon").Num()
+	if gotLat != lat || gotLon != lon {
+		t.Errorf("expected lat=%f lon=%f, got lat=%f lon=%f", lat, lon, gotLat, gotLon)
+	}
+}
+
+func TestGeo_DifferentLocation(t *testing.T) {
+	page := navigateTo(t, "/")
+	lat, lon := 35.6762, 139.6503 // Tokyo
+	err := applyGeolocation(page, lat, lon)
+	if err != nil {
+		t.Fatalf("applyGeolocation failed: %v", err)
+	}
+
+	err = (proto.BrowserGrantPermissions{
+		Permissions: []proto.BrowserPermissionType{"geolocation"},
+	}).Call(env.browser)
+	if err != nil {
+		t.Fatalf("grant permission failed: %v", err)
+	}
+
+	result, err := page.Eval(`() => new Promise((resolve, reject) => {
+		navigator.geolocation.getCurrentPosition(
+			pos => resolve({lat: pos.coords.latitude, lon: pos.coords.longitude}),
+			err => reject(err.message),
+			{timeout: 5000}
+		)
+	})`)
+	if err != nil {
+		t.Fatalf("geolocation query failed: %v", err)
+	}
+	gotLat := result.Value.Get("lat").Num()
+	gotLon := result.Value.Get("lon").Num()
+	if gotLat != lat || gotLon != lon {
+		t.Errorf("expected lat=%f lon=%f, got lat=%f lon=%f", lat, lon, gotLat, gotLon)
+	}
+}
+
+// =====================
+// media emulation tests
+// =====================
+
+func TestMedia_PrefersColorScheme(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyMedia(page, []*proto.EmulationMediaFeature{
+		{Name: "prefers-color-scheme", Value: "dark"},
+	})
+	if err != nil {
+		t.Fatalf("applyMedia failed: %v", err)
+	}
+	result, err := page.Eval(`() => window.matchMedia('(prefers-color-scheme: dark)').matches`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	if result.Value.JSON("", "") != "true" {
+		t.Error("expected prefers-color-scheme: dark to match")
+	}
+}
+
+func TestMedia_PrefersReducedMotion(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyMedia(page, []*proto.EmulationMediaFeature{
+		{Name: "prefers-reduced-motion", Value: "reduce"},
+	})
+	if err != nil {
+		t.Fatalf("applyMedia failed: %v", err)
+	}
+	result, err := page.Eval(`() => window.matchMedia('(prefers-reduced-motion: reduce)').matches`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	if result.Value.JSON("", "") != "true" {
+		t.Error("expected prefers-reduced-motion: reduce to match")
+	}
+}
+
+func TestMedia_PrintMediaType(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyMediaType(page, "print")
+	if err != nil {
+		t.Fatalf("applyMediaType failed: %v", err)
+	}
+	result, err := page.Eval(`() => window.matchMedia('print').matches`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	if result.Value.JSON("", "") != "true" {
+		t.Error("expected print media type to match")
+	}
+}
+
+func TestMedia_MultipleFeatures(t *testing.T) {
+	page := navigateTo(t, "/")
+	err := applyMedia(page, []*proto.EmulationMediaFeature{
+		{Name: "prefers-color-scheme", Value: "dark"},
+		{Name: "prefers-reduced-motion", Value: "reduce"},
+	})
+	if err != nil {
+		t.Fatalf("applyMedia failed: %v", err)
+	}
+	// Both should be active
+	result1, err := page.Eval(`() => window.matchMedia('(prefers-color-scheme: dark)').matches`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	result2, err := page.Eval(`() => window.matchMedia('(prefers-reduced-motion: reduce)').matches`)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	if result1.Value.JSON("", "") != "true" {
+		t.Error("expected prefers-color-scheme: dark to match")
+	}
+	if result2.Value.JSON("", "") != "true" {
+		t.Error("expected prefers-reduced-motion: reduce to match")
 	}
 }
 

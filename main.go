@@ -79,12 +79,12 @@ func resolveStateDir(mode scopeMode, workingDir string) string {
 
 // State persisted between CLI invocations
 type State struct {
-	DebugURL    string `json:"debug_url"`
-	ChromePID   int    `json:"chrome_pid"`
-	ActivePage  int    `json:"active_page"`  // index into pages list
-	DataDir     string `json:"data_dir"`
-	ProxyPID    int    `json:"proxy_pid,omitempty"`  // PID of auth proxy helper
-	ProxyPort   int    `json:"proxy_port,omitempty"` // local port of auth proxy
+	DebugURL   string `json:"debug_url"`
+	ChromePID  int    `json:"chrome_pid"`
+	ActivePage int    `json:"active_page"` // index into pages list
+	DataDir    string `json:"data_dir"`
+	ProxyPID   int    `json:"proxy_pid,omitempty"`  // PID of auth proxy helper
+	ProxyPort  int    `json:"proxy_port,omitempty"` // local port of auth proxy
 }
 
 func stateDir() string {
@@ -287,6 +287,16 @@ func main() {
 		cmdVisible(args)
 	case "assert":
 		cmdAssert(args)
+	case "ua":
+		cmdUA(args)
+	case "timezone":
+		cmdTimezone(args)
+	case "locale":
+		cmdLocale(args)
+	case "geo":
+		cmdGeo(args)
+	case "media":
+		cmdMedia(args)
 	case "ax-tree":
 		cmdAXTree(args)
 	case "ax-find":
@@ -386,7 +396,7 @@ func cmdStart(args []string) {
 		Set("no-sandbox").
 		Set("disable-gpu").
 		Set("single-process"). // Required for screenshots in gVisor/container environments
-		Leakless(false).        // Keep Chrome alive after CLI exits
+		Leakless(false).       // Keep Chrome alive after CLI exits
 		UserDataDir(dataDir).
 		Headless(headless)
 
@@ -1619,7 +1629,7 @@ func queryAXNodes(page *rod.Page, name, role string) ([]*proto.AccessibilityAXNo
 	}
 
 	result, err := proto.AccessibilityQueryAXTree{
-		BackendNodeID: doc.Root.BackendNodeID,
+		BackendNodeID:  doc.Root.BackendNodeID,
 		AccessibleName: name,
 		Role:           role,
 	}.Call(page)
@@ -1835,6 +1845,174 @@ func formatAXNodeDetailJSON(node *proto.AccessibilityAXNode) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+// --- Emulation commands ---
+
+// applyUserAgent sets the user agent override on the page via CDP.
+func applyUserAgent(page *rod.Page, ua string) error {
+	return (proto.NetworkSetUserAgentOverride{UserAgent: ua}).Call(page)
+}
+
+func cmdUA(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney ua <user-agent-string>")
+	}
+	ua := strings.Join(args, " ")
+	_, _, page := withPage()
+	if err := applyUserAgent(page, ua); err != nil {
+		fatal("failed to set user agent: %v", err)
+	}
+	fmt.Printf("User agent set to: %s\n", ua)
+}
+
+// applyTimezone sets the timezone override on the page via CDP.
+func applyTimezone(page *rod.Page, timezoneID string) error {
+	return (proto.EmulationSetTimezoneOverride{TimezoneID: timezoneID}).Call(page)
+}
+
+func cmdTimezone(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney timezone <timezone-id>")
+	}
+	tz := args[0]
+	_, _, page := withPage()
+	if err := applyTimezone(page, tz); err != nil {
+		fatal("failed to set timezone: %v", err)
+	}
+	fmt.Printf("Timezone set to: %s\n", tz)
+}
+
+// applyLocale sets the locale override on the page via CDP.
+func applyLocale(page *rod.Page, locale string) error {
+	return (proto.EmulationSetLocaleOverride{Locale: locale}).Call(page)
+}
+
+func cmdLocale(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney locale <locale>")
+	}
+	loc := args[0]
+	_, _, page := withPage()
+	if err := applyLocale(page, loc); err != nil {
+		fatal("failed to set locale: %v", err)
+	}
+	fmt.Printf("Locale set to: %s\n", loc)
+}
+
+// applyGeolocation sets the geolocation override on the page via CDP.
+func applyGeolocation(page *rod.Page, lat, lon float64) error {
+	accuracy := 1.0
+	return (proto.EmulationSetGeolocationOverride{
+		Latitude:  &lat,
+		Longitude: &lon,
+		Accuracy:  &accuracy,
+	}).Call(page)
+}
+
+func cmdGeo(args []string) {
+	var lat, lon float64
+	var hasLat, hasLon bool
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--lat":
+			i++
+			if i >= len(args) {
+				fatal("missing value for --lat")
+			}
+			v, err := strconv.ParseFloat(args[i], 64)
+			if err != nil {
+				fatal("invalid latitude: %v", err)
+			}
+			lat = v
+			hasLat = true
+		case "--lon":
+			i++
+			if i >= len(args) {
+				fatal("missing value for --lon")
+			}
+			v, err := strconv.ParseFloat(args[i], 64)
+			if err != nil {
+				fatal("invalid longitude: %v", err)
+			}
+			lon = v
+			hasLon = true
+		default:
+			fatal("unknown flag: %s\nusage: rodney geo --lat <lat> --lon <lon>", args[i])
+		}
+	}
+
+	if !hasLat || !hasLon {
+		fatal("usage: rodney geo --lat <lat> --lon <lon>")
+	}
+
+	_, _, page := withPage()
+	if err := applyGeolocation(page, lat, lon); err != nil {
+		fatal("failed to set geolocation: %v", err)
+	}
+	fmt.Printf("Geolocation set to: lat=%f lon=%f\n", lat, lon)
+}
+
+// applyMedia sets media feature overrides on the page via CDP.
+func applyMedia(page *rod.Page, features []*proto.EmulationMediaFeature) error {
+	return (proto.EmulationSetEmulatedMedia{Features: features}).Call(page)
+}
+
+// applyMediaType sets the emulated media type (e.g. "print", "screen") on the page via CDP.
+func applyMediaType(page *rod.Page, mediaType string) error {
+	return (proto.EmulationSetEmulatedMedia{Media: mediaType}).Call(page)
+}
+
+func cmdMedia(args []string) {
+	var mediaType string
+	var features []*proto.EmulationMediaFeature
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--type":
+			i++
+			if i >= len(args) {
+				fatal("missing value for --type")
+			}
+			mediaType = args[i]
+		case "--feature":
+			i++
+			if i >= len(args) {
+				fatal("missing value for --feature")
+			}
+			parts := strings.SplitN(args[i], "=", 2)
+			if len(parts) != 2 {
+				fatal("invalid feature format, expected name=value: %s", args[i])
+			}
+			features = append(features, &proto.EmulationMediaFeature{
+				Name:  parts[0],
+				Value: parts[1],
+			})
+		default:
+			fatal("unknown flag: %s\nusage: rodney media [--type T] [--feature name=value ...]", args[i])
+		}
+	}
+
+	if mediaType == "" && len(features) == 0 {
+		fatal("usage: rodney media [--type T] [--feature name=value ...]")
+	}
+
+	_, _, page := withPage()
+	req := proto.EmulationSetEmulatedMedia{
+		Media:    mediaType,
+		Features: features,
+	}
+	if err := req.Call(page); err != nil {
+		fatal("failed to set media emulation: %v", err)
+	}
+
+	if mediaType != "" {
+		fmt.Printf("Media type set to: %s\n", mediaType)
+	}
+	for _, f := range features {
+		fmt.Printf("Media feature set: %s=%s\n", f.Name, f.Value)
+	}
 }
 
 // --- Auth proxy for environments with authenticated HTTP proxies ---
