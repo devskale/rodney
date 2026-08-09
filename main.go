@@ -44,9 +44,9 @@ var version = "0.5.0-devskale" // devskale fork
 type scopeMode int
 
 const (
-	scopeAuto   scopeMode = iota // auto-detect: local if .rodney/state.json exists in cwd, else global
-	scopeLocal                   // force local (./.rodney/)
-	scopeGlobal                  // force global (~/.rodney/)
+	scopeAuto   scopeMode = iota // auto-detect: local if .jodney/state.json exists in cwd, else global
+	scopeLocal                   // force local (./.jodney/)
+	scopeGlobal                  // force global (~/.jodney/)
 )
 
 // activeStateDir is set once at startup based on --local/--global flags.
@@ -74,17 +74,17 @@ func extractScopeArgs(args []string) (scopeMode, []string) {
 func resolveStateDir(mode scopeMode, workingDir string) string {
 	switch mode {
 	case scopeLocal:
-		return filepath.Join(workingDir, ".rodney")
+		return filepath.Join(workingDir, ".jodney")
 	case scopeGlobal:
 		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".rodney")
+		return filepath.Join(home, ".jodney")
 	default: // scopeAuto
-		localDir := filepath.Join(workingDir, ".rodney")
+		localDir := filepath.Join(workingDir, ".jodney")
 		if _, err := os.Stat(filepath.Join(localDir, "state.json")); err == nil {
 			return localDir
 		}
 		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".rodney")
+		return filepath.Join(home, ".jodney")
 	}
 }
 
@@ -107,14 +107,14 @@ func stateDir() string {
 	if stateDirOverride != "" {
 		return stateDirOverride
 	}
-	if dir := os.Getenv("RODNEY_HOME"); dir != "" {
+	if dir := os.Getenv("JODNEY_HOME"); dir != "" {
 		return dir
 	}
 	if activeStateDir != "" {
 		return activeStateDir
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".rodney")
+	return filepath.Join(home, ".jodney")
 }
 
 func statePath() string {
@@ -124,7 +124,7 @@ func statePath() string {
 func loadState() (*State, error) {
 	data, err := os.ReadFile(statePath())
 	if err != nil {
-		return nil, fmt.Errorf("no browser session (run 'rodney start' first)")
+		return nil, fmt.Errorf("no browser session (run 'jodney start' first)")
 	}
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -409,10 +409,10 @@ func parseStartArgs(args []string) (ignoreCertErrors bool, headless bool, err er
 	show := fs.Bool("show", false, "")
 
 	if parseErr := fs.Parse(args); parseErr != nil {
-		return false, true, fmt.Errorf("unknown flag: %s\nusage: rodney start [--show] [--insecure]", findUnknownFlag(args, fs))
+		return false, true, fmt.Errorf("unknown flag: %s\nusage: jodney start [--show] [--insecure]", findUnknownFlag(args, fs))
 	}
 	if fs.NArg() > 0 {
-		return false, true, fmt.Errorf("unknown flag: %s\nusage: rodney start [--show] [--insecure]", fs.Arg(0))
+		return false, true, fmt.Errorf("unknown flag: %s\nusage: jodney start [--show] [--insecure]", fs.Arg(0))
 	}
 	headless = !*show
 	return ignoreCertErrors, headless, nil
@@ -446,7 +446,7 @@ func cmdStart(args []string) {
 		Headless(headless)
 
 	// When in non-headless mode, make sure that we show the startup window immediately
-	// (instead of showing a window only after calling "rodney open")
+	// (instead of showing a window only after calling "jodney open")
 	if !headless {
 		l = l.Delete("no-startup-window")
 	}
@@ -516,7 +516,7 @@ func cmdStart(args []string) {
 
 func cmdConnect(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney connect <host:port>")
+		fatal("usage: jodney connect <host:port>")
 	}
 	hostport := args[0]
 	if _, _, err := net.SplitHostPort(hostport); err != nil {
@@ -623,7 +623,7 @@ func cmdStatus(args []string) {
 
 func cmdOpen(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney open <url>")
+		fatal("usage: jodney open <url>")
 	}
 	url := args[0]
 	// Add scheme if missing
@@ -751,7 +751,7 @@ func cmdHTML(args []string) {
 
 func cmdText(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney text <selector>")
+		fatal("usage: jodney text <selector>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -767,7 +767,7 @@ func cmdText(args []string) {
 
 func cmdAttr(args []string) {
 	if len(args) < 2 {
-		fatal("usage: rodney attr <selector> <attribute>")
+		fatal("usage: jodney attr <selector> <attribute>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -811,7 +811,7 @@ func cmdPDF(args []string) {
 
 func cmdJS(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney js <expression>")
+		fatal("usage: jodney js <expression>")
 	}
 	expr := strings.Join(args, " ")
 	_, _, page := withPage()
@@ -845,7 +845,7 @@ func cmdJS(args []string) {
 
 func cmdClick(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney click <selector>")
+		fatal("usage: jodney click <selector>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -862,7 +862,7 @@ func cmdClick(args []string) {
 
 func cmdInput(args []string) {
 	if len(args) < 2 {
-		fatal("usage: rodney input <selector> <text>")
+		fatal("usage: jodney input <selector> <text>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -876,7 +876,7 @@ func cmdInput(args []string) {
 
 func cmdClear(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney clear <selector>")
+		fatal("usage: jodney clear <selector>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -889,7 +889,7 @@ func cmdClear(args []string) {
 
 func cmdFile(args []string) {
 	if len(args) < 2 {
-		fatal("usage: rodney file <selector> <path|->")
+		fatal("usage: jodney file <selector> <path|->")
 	}
 	selector := args[0]
 	filePath := args[1]
@@ -906,7 +906,7 @@ func cmdFile(args []string) {
 		if err != nil {
 			fatal("failed to read stdin: %v", err)
 		}
-		tmp, err := os.CreateTemp("", "rodney-upload-*")
+		tmp, err := os.CreateTemp("", "jodney-upload-*")
 		if err != nil {
 			fatal("failed to create temp file: %v", err)
 		}
@@ -930,7 +930,7 @@ func cmdFile(args []string) {
 
 func cmdDownload(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney download <selector> [file|-]")
+		fatal("usage: jodney download <selector> [file|-]")
 	}
 	selector := args[0]
 	outFile := ""
@@ -1082,7 +1082,7 @@ func mimeToExt(mime string) string {
 
 func cmdSelect(args []string) {
 	if len(args) < 2 {
-		fatal("usage: rodney select <selector> <value>")
+		fatal("usage: jodney select <selector> <value>")
 	}
 	_, _, page := withPage()
 	// Use JavaScript to set the value, as rod's Select matches by text
@@ -1102,7 +1102,7 @@ func cmdSelect(args []string) {
 
 func cmdSubmit(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney submit <selector>")
+		fatal("usage: jodney submit <selector>")
 	}
 	_, _, page := withPage()
 	_, err := page.Element(args[0])
@@ -1115,7 +1115,7 @@ func cmdSubmit(args []string) {
 
 func cmdHover(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney hover <selector>")
+		fatal("usage: jodney hover <selector>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -1128,7 +1128,7 @@ func cmdHover(args []string) {
 
 func cmdFocus(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney focus <selector>")
+		fatal("usage: jodney focus <selector>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -1141,7 +1141,7 @@ func cmdFocus(args []string) {
 
 func cmdWait(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney wait <selector>")
+		fatal("usage: jodney wait <selector>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -1172,7 +1172,7 @@ func cmdWaitIdle(args []string) {
 
 func cmdSleep(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney sleep <seconds>")
+		fatal("usage: jodney sleep <seconds>")
 	}
 	secs, err := strconv.ParseFloat(args[0], 64)
 	if err != nil {
@@ -1255,7 +1255,7 @@ func cmdScreenshot(args []string) {
 
 func cmdScreenshotEl(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney screenshot-el <selector> [file]")
+		fatal("usage: jodney screenshot-el <selector> [file]")
 	}
 	file := "element.png"
 	if len(args) > 1 {
@@ -1317,7 +1317,7 @@ func stopVideo(outputFile string) (*VideoResult, error) {
 		return nil, err
 	}
 	if !s.VideoRecording {
-		return nil, fmt.Errorf("video recording is not active (run 'rodney start-video' first)")
+		return nil, fmt.Errorf("video recording is not active (run 'jodney start-video' first)")
 	}
 
 	framesDir := s.VideoDir
@@ -1727,7 +1727,7 @@ func cmdPages(args []string) {
 
 func cmdPage(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney page <index>")
+		fatal("usage: jodney page <index>")
 	}
 	idx, err := strconv.Atoi(args[0])
 	if err != nil {
@@ -1843,7 +1843,7 @@ func cmdClosePage(args []string) {
 
 func cmdExists(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney exists <selector>")
+		fatal("usage: jodney exists <selector>")
 	}
 	_, _, page := withPage()
 	has, _, err := page.Has(args[0])
@@ -1861,7 +1861,7 @@ func cmdExists(args []string) {
 
 func cmdCount(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney count <selector>")
+		fatal("usage: jodney count <selector>")
 	}
 	_, _, page := withPage()
 	els, err := page.Elements(args[0])
@@ -1873,7 +1873,7 @@ func cmdCount(args []string) {
 
 func cmdVisible(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney visible <selector>")
+		fatal("usage: jodney visible <selector>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -1939,12 +1939,12 @@ func formatAssertFail(actual string, expected *string, message string) string {
 
 func cmdAssert(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney assert <js-expression> [expected] [--message msg]")
+		fatal("usage: jodney assert <js-expression> [expected] [--message msg]")
 	}
 
 	expr, expected, message := parseAssertArgs(args)
 	if expr == "" {
-		fatal("usage: rodney assert <js-expression> [expected] [--message msg]")
+		fatal("usage: jodney assert <js-expression> [expected] [--message msg]")
 	}
 
 	_, _, page := withPage()
@@ -2008,10 +2008,10 @@ func cmdAXTree(args []string) {
 	jsonOutput := fs.Bool("json", false, "")
 
 	if err := fs.Parse(args); err != nil {
-		fatal("unknown flag: %s\nusage: rodney ax-tree [--depth N] [--json]", findUnknownFlag(args, fs))
+		fatal("unknown flag: %s\nusage: jodney ax-tree [--depth N] [--json]", findUnknownFlag(args, fs))
 	}
 	if fs.NArg() > 0 {
-		fatal("unknown flag: %s\nusage: rodney ax-tree [--depth N] [--json]", fs.Arg(0))
+		fatal("unknown flag: %s\nusage: jodney ax-tree [--depth N] [--json]", fs.Arg(0))
 	}
 
 	var depth *int
@@ -2042,10 +2042,10 @@ func cmdAXFind(args []string) {
 	jsonOutput := fs.Bool("json", false, "")
 
 	if err := fs.Parse(args); err != nil {
-		fatal("unknown flag: %s\nusage: rodney ax-find [--name N] [--role R] [--json]", findUnknownFlag(args, fs))
+		fatal("unknown flag: %s\nusage: jodney ax-find [--name N] [--role R] [--json]", findUnknownFlag(args, fs))
 	}
 	if fs.NArg() > 0 {
-		fatal("unknown flag: %s\nusage: rodney ax-find [--name N] [--role R] [--json]", fs.Arg(0))
+		fatal("unknown flag: %s\nusage: jodney ax-find [--name N] [--role R] [--json]", fs.Arg(0))
 	}
 
 	_, _, page := withPage()
@@ -2084,7 +2084,7 @@ func cmdAXNode(args []string) {
 	fs.Parse(filtered)
 
 	if fs.NArg() < 1 {
-		fatal("usage: rodney ax-node <selector> [--json]")
+		fatal("usage: jodney ax-node <selector> [--json]")
 	}
 	selector := fs.Arg(0)
 
@@ -2338,7 +2338,7 @@ func applyUserAgent(page *rod.Page, ua string) error {
 
 func cmdUA(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney ua <user-agent-string>")
+		fatal("usage: jodney ua <user-agent-string>")
 	}
 	ua := strings.Join(args, " ")
 	_, _, page := withPage()
@@ -2355,7 +2355,7 @@ func applyTimezone(page *rod.Page, timezoneID string) error {
 
 func cmdTimezone(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney timezone <timezone-id>")
+		fatal("usage: jodney timezone <timezone-id>")
 	}
 	tz := args[0]
 	_, _, page := withPage()
@@ -2372,7 +2372,7 @@ func applyLocale(page *rod.Page, locale string) error {
 
 func cmdLocale(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney locale <locale>")
+		fatal("usage: jodney locale <locale>")
 	}
 	loc := args[0]
 	_, _, page := withPage()
@@ -2421,12 +2421,12 @@ func cmdGeo(args []string) {
 			lon = v
 			hasLon = true
 		default:
-			fatal("unknown flag: %s\nusage: rodney geo --lat <lat> --lon <lon>", args[i])
+			fatal("unknown flag: %s\nusage: jodney geo --lat <lat> --lon <lon>", args[i])
 		}
 	}
 
 	if !hasLat || !hasLon {
-		fatal("usage: rodney geo --lat <lat> --lon <lon>")
+		fatal("usage: jodney geo --lat <lat> --lon <lon>")
 	}
 
 	_, _, page := withPage()
@@ -2472,12 +2472,12 @@ func cmdMedia(args []string) {
 				Value: parts[1],
 			})
 		default:
-			fatal("unknown flag: %s\nusage: rodney media [--type T] [--feature name=value ...]", args[i])
+			fatal("unknown flag: %s\nusage: jodney media [--type T] [--feature name=value ...]", args[i])
 		}
 	}
 
 	if mediaType == "" && len(features) == 0 {
-		fatal("usage: rodney media [--type T] [--feature name=value ...]")
+		fatal("usage: jodney media [--type T] [--feature name=value ...]")
 	}
 
 	_, _, page := withPage()
@@ -2532,7 +2532,7 @@ func detectProxy() (server, user, pass string, needed bool) {
 
 func parseCookieSetArgs(args []string) (*proto.NetworkCookieParam, error) {
 	if len(args) < 2 {
-		return nil, fmt.Errorf("usage: rodney cookie-set <name> <value> --domain <domain> [options]")
+		return nil, fmt.Errorf("usage: jodney cookie-set <name> <value> --domain <domain> [options]")
 	}
 	param := &proto.NetworkCookieParam{
 		Name:  args[0],
@@ -2753,7 +2753,7 @@ func parseCookieDeleteArgs(args []string) (name, domain, cookieURL, path string,
 		}
 	}
 	if name == "" {
-		return "", "", "", "", fmt.Errorf("usage: rodney cookie-delete <name> [--domain <domain>] [--url <url>] [--path <path>]")
+		return "", "", "", "", fmt.Errorf("usage: jodney cookie-delete <name> [--domain <domain>] [--url <url>] [--path <path>]")
 	}
 	return
 }
@@ -2822,7 +2822,7 @@ func cmdCookieClear(args []string) {
 			}
 			domain = args[i]
 		default:
-			fatal("unknown flag: %s\nusage: rodney cookie-clear [--domain <domain>]", args[i])
+			fatal("unknown flag: %s\nusage: jodney cookie-clear [--domain <domain>]", args[i])
 		}
 	}
 	_, _, page := withPage()
@@ -2838,11 +2838,11 @@ func cmdCookieClear(args []string) {
 	}
 }
 
-// cmdInternalProxy is a hidden subcommand: rodney _proxy <port> <upstream> <authHeader>
+// cmdInternalProxy is a hidden subcommand: jodney _proxy <port> <upstream> <authHeader>
 // It runs a local auth proxy that forwards to the upstream proxy with credentials.
 func cmdInternalProxy(args []string) {
 	if len(args) < 3 {
-		fatal("usage: rodney _proxy <port> <upstream> <authHeader>")
+		fatal("usage: jodney _proxy <port> <upstream> <authHeader>")
 	}
 	port := args[0]
 	upstream := args[1]

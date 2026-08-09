@@ -1,96 +1,96 @@
-rodney - Chrome automation from the command line
+jodney - Chrome automation from the command line
 
 Browser lifecycle:
-  rodney start [--show] [--insecure | -k]  Launch Chrome (headless by default, --show for visible)
-  rodney connect <host:port>      Connect to existing Chrome on remote debug port
-  rodney stop                     Shut down Chrome
-  rodney status                   Show browser status
+  jodney start [--show] [--insecure | -k]  Launch Chrome (headless by default, --show for visible)
+  jodney connect <host:port>      Connect to existing Chrome on remote debug port
+  jodney stop                     Shut down Chrome
+  jodney status                   Show browser status
 
 Navigation:
-  rodney open <url>               Navigate to URL
-  rodney back                     Go back in history
-  rodney forward                  Go forward in history
-  rodney reload [--hard]          Reload page (--hard bypasses cache)
-  rodney clear-cache              Clear the browser cache
+  jodney open <url>               Navigate to URL
+  jodney back                     Go back in history
+  jodney forward                  Go forward in history
+  jodney reload [--hard]          Reload page (--hard bypasses cache)
+  jodney clear-cache              Clear the browser cache
 
 Page info:
-  rodney url                      Print current URL
-  rodney title                    Print page title
-  rodney html [selector]          Print HTML (page or element)
-  rodney text <selector>          Print text content of element
-  rodney attr <selector> <name>   Print attribute value
-  rodney pdf [file]               Save page as PDF
+  jodney url                      Print current URL
+  jodney title                    Print page title
+  jodney html [selector]          Print HTML (page or element)
+  jodney text <selector>          Print text content of element
+  jodney attr <selector> <name>   Print attribute value
+  jodney pdf [file]               Save page as PDF
 
 Interaction:
-  rodney js <expression>          Evaluate JavaScript expression
-  rodney click <selector>         Click an element
-  rodney input <selector> <text>  Type text into an input field
-  rodney clear <selector>         Clear an input field
-  rodney file <selector> <path|-> Set file on a file input (- for stdin)
-  rodney download <sel> [file|-]  Download href/src target (- for stdout)
-  rodney select <selector> <val>  Select dropdown option by value
-  rodney submit <selector>        Submit a form
-  rodney hover <selector>         Hover over an element
-  rodney focus <selector>         Focus an element
+  jodney js <expression>          Evaluate JavaScript expression
+  jodney click <selector>         Click an element
+  jodney input <selector> <text>  Type text into an input field
+  jodney clear <selector>         Clear an input field
+  jodney file <selector> <path|-> Set file on a file input (- for stdin)
+  jodney download <sel> [file|-]  Download href/src target (- for stdout)
+  jodney select <selector> <val>  Select dropdown option by value
+  jodney submit <selector>        Submit a form
+  jodney hover <selector>         Hover over an element
+  jodney focus <selector>         Focus an element
 
 Waiting:
-  rodney wait <selector>          Wait for element to appear
-  rodney waitload                 Wait for page load
-  rodney waitstable               Wait for DOM to stabilize
-  rodney waitidle                 Wait for network idle
-  rodney sleep <seconds>          Sleep for N seconds
+  jodney wait <selector>          Wait for element to appear
+  jodney waitload                 Wait for page load
+  jodney waitstable               Wait for DOM to stabilize
+  jodney waitidle                 Wait for network idle
+  jodney sleep <seconds>          Sleep for N seconds
 
 Screenshots:
-  rodney screenshot [-w N] [-h N] [file]  Take page screenshot
-  rodney screenshot-el <sel> [f]  Screenshot an element
+  jodney screenshot [-w N] [-h N] [file]  Take page screenshot
+  jodney screenshot-el <sel> [f]  Screenshot an element
 
 Video recording:
-  rodney start-video              Start recording video
-  rodney stop-video [file]        Stop and save (.gif default, .mp4 needs ffmpeg)
+  jodney start-video              Start recording video
+  jodney stop-video [file]        Stop and save (.gif default, .mp4 needs ffmpeg)
 
 Tabs:
-  rodney pages                    List all pages/tabs
-  rodney page <index>             Switch to page by index
-  rodney newpage [url]            Open a new page/tab
-  rodney closepage [index]        Close a page/tab
+  jodney pages                    List all pages/tabs
+  jodney page <index>             Switch to page by index
+  jodney newpage [url]            Open a new page/tab
+  jodney closepage [index]        Close a page/tab
 
 Element checks:
-  rodney exists <selector>        Check if element exists (exit 1 if not)
-  rodney count <selector>         Count matching elements
-  rodney visible <selector>       Check if element is visible (exit 1 if not)
-  rodney assert <expr> [expected] [-m msg]  Assert JS expression (truthy or equality)
+  jodney exists <selector>        Check if element exists (exit 1 if not)
+  jodney count <selector>         Count matching elements
+  jodney visible <selector>       Check if element is visible (exit 1 if not)
+  jodney assert <expr> [expected] [-m msg]  Assert JS expression (truthy or equality)
 
 Cookies:
-  rodney cookie-set <name> <val> [opts]  Set a cookie (defaults to current page)
-  rodney cookie-get [name] [--json]      Get cookies (name for value, omit for all)
-  rodney cookie-delete <name> [opts]     Delete cookies by name
-  rodney cookie-clear [--domain <dom>]    Clear all cookies (or just one domain)
+  jodney cookie-set <name> <val> [opts]  Set a cookie (defaults to current page)
+  jodney cookie-get [name] [--json]      Get cookies (name for value, omit for all)
+  jodney cookie-delete <name> [opts]     Delete cookies by name
+  jodney cookie-clear [--domain <dom>]    Clear all cookies (or just one domain)
 
 Emulation:
-  rodney ua <user-agent>            Override browser user agent string
-  rodney timezone <timezone-id>     Override timezone (e.g. "Asia/Tokyo")
-  rodney locale <locale>            Override locale (e.g. "de-DE")
-  rodney geo --lat N --lon N        Spoof geolocation coordinates
-  rodney media [--type T] [--feature name=value ...]
+  jodney ua <user-agent>            Override browser user agent string
+  jodney timezone <timezone-id>     Override timezone (e.g. "Asia/Tokyo")
+  jodney locale <locale>            Override locale (e.g. "de-DE")
+  jodney geo --lat N --lon N        Spoof geolocation coordinates
+  jodney media [--type T] [--feature name=value ...]
                                     Emulate media type or features
 
 Accessibility:
-  rodney ax-tree [--depth N] [--json]       Dump accessibility tree
-  rodney ax-find [--name N] [--role R] [--json]  Find accessible nodes
-  rodney ax-node <selector> [--json]        Show accessibility info for element
+  jodney ax-tree [--depth N] [--json]       Dump accessibility tree
+  jodney ax-find [--name N] [--role R] [--json]  Find accessible nodes
+  jodney ax-node <selector> [--json]        Show accessibility info for element
 
 Options:
-  --local                         Use directory-scoped session (./.rodney/)
-  --global                        Use global session (~/.rodney/)
+  --local                         Use directory-scoped session (./.jodney/)
+  --global                        Use global session (~/.jodney/)
   --version                       Print version and exit
   --help, -h, help                Show this help message
 
-By default, commands auto-detect: if ./.rodney/state.json exists in the
+By default, commands auto-detect: if ./.jodney/state.json exists in the
 current directory, the local session is used; otherwise the global session.
-Use "rodney start --local" to create a directory-scoped session.
+Use "jodney start --local" to create a directory-scoped session.
 
 Environment:
-  RODNEY_HOME                     Override data directory (default: ~/.rodney)
+  JODNEY_HOME                     Override data directory (default: ~/.jodney)
 
 Exit codes:
   0  Success
