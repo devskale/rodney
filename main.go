@@ -293,6 +293,14 @@ func main() {
 		cmdAXFind(args)
 	case "ax-node":
 		cmdAXNode(args)
+	case "cookie-set":
+		cmdCookieSet(args)
+	case "cookie-get":
+		cmdCookieGet(args)
+	case "cookie-delete":
+		cmdCookieDelete(args)
+	case "cookie-clear":
+		cmdCookieClear(args)
 	case "help", "-h", "--help":
 		printUsage()
 		os.Exit(0)
@@ -1858,6 +1866,316 @@ func detectProxy() (server, user, pass string, needed bool) {
 	}
 	server = parsed.Hostname() + ":" + parsed.Port()
 	return server, user, pass, true
+}
+
+// --- Cookie commands ---
+
+func parseCookieSetArgs(args []string) (*proto.NetworkCookieParam, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("usage: rodney cookie-set <name> <value> --domain <domain> [options]")
+	}
+	param := &proto.NetworkCookieParam{
+		Name:  args[0],
+		Value: args[1],
+	}
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--domain":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--domain requires a value")
+			}
+			param.Domain = args[i]
+		case "--url":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--url requires a value")
+			}
+			param.URL = args[i]
+		case "--path":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--path requires a value")
+			}
+			param.Path = args[i]
+		case "--secure":
+			param.Secure = true
+		case "--httponly":
+			param.HTTPOnly = true
+		case "--samesite":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--samesite requires a value")
+			}
+			switch args[i] {
+			case "Strict":
+				param.SameSite = proto.NetworkCookieSameSiteStrict
+			case "Lax":
+				param.SameSite = proto.NetworkCookieSameSiteLax
+			case "None":
+				param.SameSite = proto.NetworkCookieSameSiteNone
+			default:
+				return nil, fmt.Errorf("--samesite must be Strict, Lax, or None")
+			}
+		case "--expires":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--expires requires a value")
+			}
+			ts, err := strconv.ParseFloat(args[i], 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --expires value: %v", err)
+			}
+			param.Expires = proto.TimeSinceEpoch(ts)
+		default:
+			return nil, fmt.Errorf("unknown flag: %s", args[i])
+		}
+	}
+	return param, nil
+}
+
+func setCookieOnBrowser(page *rod.Page, param *proto.NetworkCookieParam) {
+	err := proto.NetworkSetCookies{
+		Cookies: []*proto.NetworkCookieParam{param},
+	}.Call(page)
+	if err != nil {
+		fatal("failed to set cookie: %v", err)
+	}
+}
+
+func cmdCookieSet(args []string) {
+	param, err := parseCookieSetArgs(args)
+	if err != nil {
+		fatal("%v", err)
+	}
+	_, _, page := withPage()
+	// Default to current page URL (like document.cookie= in JS)
+	if param.Domain == "" && param.URL == "" {
+		info, err := page.Info()
+		if err != nil {
+			fatal("failed to get page info: %v", err)
+		}
+		param.URL = info.URL
+	}
+	setCookieOnBrowser(page, param)
+}
+
+func parseCookieGetArgs(args []string) (name string, urls []string, jsonOutput bool) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--domain":
+			i++
+			if i < len(args) {
+				urls = append(urls, "https://"+args[i]+"/")
+			}
+		case "--url":
+			i++
+			if i < len(args) {
+				urls = append(urls, args[i])
+			}
+		case "--json":
+			jsonOutput = true
+		default:
+			if name == "" {
+				name = args[i]
+			}
+		}
+	}
+	return
+}
+
+func getCookiesFromBrowser(page *rod.Page, urls []string) []*proto.NetworkCookie {
+	result, err := proto.NetworkGetCookies{Urls: urls}.Call(page)
+	if err != nil {
+		fatal("failed to get cookies: %v", err)
+	}
+	return result.Cookies
+}
+
+func formatCookiesDefault(cookies []*proto.NetworkCookie) string {
+	var lines []string
+	for _, c := range cookies {
+		parts := []string{
+			"name=" + c.Name,
+			"value=" + c.Value,
+			"domain=" + c.Domain,
+			"path=" + c.Path,
+		}
+		if c.Secure {
+			parts = append(parts, "secure")
+		}
+		if c.HTTPOnly {
+			parts = append(parts, "httponly")
+		}
+		if c.Session {
+			parts = append(parts, "session")
+		} else {
+			t := time.Unix(int64(c.Expires), 0).UTC()
+			parts = append(parts, "expires="+t.Format(time.RFC3339))
+		}
+		lines = append(lines, strings.Join(parts, "\t"))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatCookiesJSON(cookies []*proto.NetworkCookie) string {
+	data, err := json.MarshalIndent(cookies, "", "  ")
+	if err != nil {
+		fatal("failed to marshal cookies: %v", err)
+	}
+	return string(data)
+}
+
+func cmdCookieGet(args []string) {
+	name, urls, jsonOutput := parseCookieGetArgs(args)
+	_, _, page := withPage()
+	cookies := getCookiesFromBrowser(page, urls)
+
+	if name != "" && !jsonOutput {
+		// Print just the value of the first matching cookie
+		for _, c := range cookies {
+			if c.Name == name {
+				fmt.Println(c.Value)
+				return
+			}
+		}
+		return
+	}
+
+	if name != "" {
+		// Filter to matching name for JSON output
+		var filtered []*proto.NetworkCookie
+		for _, c := range cookies {
+			if c.Name == name {
+				filtered = append(filtered, c)
+			}
+		}
+		cookies = filtered
+	}
+
+	if jsonOutput {
+		fmt.Println(formatCookiesJSON(cookies))
+	} else {
+		out := formatCookiesDefault(cookies)
+		if out != "" {
+			fmt.Println(out)
+		}
+	}
+}
+
+func parseCookieDeleteArgs(args []string) (name, domain, cookieURL, path string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--domain":
+			i++
+			if i >= len(args) {
+				return "", "", "", "", fmt.Errorf("--domain requires a value")
+			}
+			domain = args[i]
+		case "--url":
+			i++
+			if i >= len(args) {
+				return "", "", "", "", fmt.Errorf("--url requires a value")
+			}
+			cookieURL = args[i]
+		case "--path":
+			i++
+			if i >= len(args) {
+				return "", "", "", "", fmt.Errorf("--path requires a value")
+			}
+			path = args[i]
+		default:
+			if name == "" {
+				name = args[i]
+			} else {
+				return "", "", "", "", fmt.Errorf("unknown flag: %s", args[i])
+			}
+		}
+	}
+	if name == "" {
+		return "", "", "", "", fmt.Errorf("usage: rodney cookie-delete <name> [--domain <domain>] [--url <url>] [--path <path>]")
+	}
+	return
+}
+
+func deleteCookieFromBrowser(page *rod.Page, name, domain, cookieURL, path string) {
+	if domain != "" || cookieURL != "" || path != "" {
+		// Direct delete with specified filters
+		err := proto.NetworkDeleteCookies{
+			Name:   name,
+			Domain: domain,
+			URL:    cookieURL,
+			Path:   path,
+		}.Call(page)
+		if err != nil {
+			fatal("failed to delete cookie: %v", err)
+		}
+		return
+	}
+	// No filters: find all cookies with this name and delete each
+	cookies := getCookiesFromBrowser(page, nil)
+	for _, c := range cookies {
+		if c.Name == name {
+			err := proto.NetworkDeleteCookies{
+				Name:   name,
+				Domain: c.Domain,
+				Path:   c.Path,
+			}.Call(page)
+			if err != nil {
+				fatal("failed to delete cookie %s (domain=%s): %v", name, c.Domain, err)
+			}
+		}
+	}
+}
+
+func cmdCookieDelete(args []string) {
+	name, domain, cookieURL, path, err := parseCookieDeleteArgs(args)
+	if err != nil {
+		fatal("%v", err)
+	}
+	_, _, page := withPage()
+	deleteCookieFromBrowser(page, name, domain, cookieURL, path)
+}
+
+func clearCookiesForDomain(page *rod.Page, domain string) {
+	cookies := getCookiesFromBrowser(page, []string{"https://" + domain + "/"})
+	for _, c := range cookies {
+		err := proto.NetworkDeleteCookies{
+			Name:   c.Name,
+			Domain: c.Domain,
+			Path:   c.Path,
+		}.Call(page)
+		if err != nil {
+			fatal("failed to delete cookie %s: %v", c.Name, err)
+		}
+	}
+}
+
+func cmdCookieClear(args []string) {
+	var domain string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--domain":
+			i++
+			if i >= len(args) {
+				fatal("--domain requires a value")
+			}
+			domain = args[i]
+		default:
+			fatal("unknown flag: %s\nusage: rodney cookie-clear [--domain <domain>]", args[i])
+		}
+	}
+	_, _, page := withPage()
+	if domain != "" {
+		clearCookiesForDomain(page, domain)
+		fmt.Printf("Cookies cleared for %s\n", domain)
+	} else {
+		err := proto.NetworkClearBrowserCookies{}.Call(page)
+		if err != nil {
+			fatal("failed to clear cookies: %v", err)
+		}
+		fmt.Println("All cookies cleared")
+	}
 }
 
 // cmdInternalProxy is a hidden subcommand: rodney _proxy <port> <upstream> <authHeader>

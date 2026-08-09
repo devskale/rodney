@@ -1224,3 +1224,526 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 		}
 	})
 }
+
+// =====================
+// cookie tests (RED)
+// =====================
+
+// Helper to clear all cookies before a cookie test
+func clearCookies(t *testing.T, page *rod.Page) {
+	t.Helper()
+	err := proto.NetworkClearBrowserCookies{}.Call(page)
+	if err != nil {
+		t.Fatalf("failed to clear cookies: %v", err)
+	}
+}
+
+func TestCookieSet_RoundTrip(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	// Set a cookie using --url approach (test server is on 127.0.0.1)
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name:  "session_id",
+		Value: "abc123",
+		URL:   env.server.URL + "/",
+	})
+
+	// Read it back
+	result, err := proto.NetworkGetCookies{Urls: []string{env.server.URL + "/"}}.Call(page)
+	if err != nil {
+		t.Fatalf("getCookies failed: %v", err)
+	}
+
+	found := false
+	for _, c := range result.Cookies {
+		if c.Name == "session_id" && c.Value == "abc123" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("cookie session_id=abc123 not found after setting it")
+	}
+}
+
+func TestCookieSet_WithURL(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name:  "url_cookie",
+		Value: "fromurl",
+		URL:   env.server.URL + "/somepath",
+	})
+
+	result, err := proto.NetworkGetCookies{Urls: []string{env.server.URL + "/somepath"}}.Call(page)
+	if err != nil {
+		t.Fatalf("getCookies failed: %v", err)
+	}
+
+	found := false
+	for _, c := range result.Cookies {
+		if c.Name == "url_cookie" && c.Value == "fromurl" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("cookie url_cookie=fromurl not found after setting via URL")
+	}
+}
+
+func TestCookieSet_SecureHTTPOnly(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name:     "secure_cookie",
+		Value:    "secret",
+		URL:      "https://secure.example.com/",
+		Secure:   true,
+		HTTPOnly: true,
+	})
+
+	result, err := proto.NetworkGetCookies{Urls: []string{"https://secure.example.com/"}}.Call(page)
+	if err != nil {
+		t.Fatalf("getCookies failed: %v", err)
+	}
+
+	for _, c := range result.Cookies {
+		if c.Name == "secure_cookie" {
+			if !c.Secure {
+				t.Errorf("expected cookie to be secure")
+			}
+			if !c.HTTPOnly {
+				t.Errorf("expected cookie to be httponly")
+			}
+			return
+		}
+	}
+	t.Errorf("secure_cookie not found")
+}
+
+func TestParseCookieSetArgs_NoDomainOrURL(t *testing.T) {
+	param, err := parseCookieSetArgs([]string{"name", "value"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// No domain or URL set — cmdCookieSet will default to current page URL
+	if param.Domain != "" {
+		t.Errorf("domain = %q, want empty", param.Domain)
+	}
+	if param.URL != "" {
+		t.Errorf("url = %q, want empty", param.URL)
+	}
+}
+
+func TestCookieSet_DefaultsToCurrentPage(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	// Simulate what cmdCookieSet does: parse args with no --domain/--url,
+	// then fill in the page URL
+	param, err := parseCookieSetArgs([]string{"page_cookie", "hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if param.Domain == "" && param.URL == "" {
+		info, infoErr := page.Info()
+		if infoErr != nil {
+			t.Fatalf("failed to get page info: %v", infoErr)
+		}
+		param.URL = info.URL
+	}
+
+	err = proto.NetworkSetCookies{
+		Cookies: []*proto.NetworkCookieParam{param},
+	}.Call(page)
+	if err != nil {
+		t.Fatalf("setCookies failed: %v", err)
+	}
+
+	// Read it back
+	result, infoErr := proto.NetworkGetCookies{Urls: []string{env.server.URL + "/"}}.Call(page)
+	if infoErr != nil {
+		t.Fatalf("getCookies failed: %v", infoErr)
+	}
+	found := false
+	for _, c := range result.Cookies {
+		if c.Name == "page_cookie" && c.Value == "hello" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("cookie page_cookie=hello not found — default to current page URL didn't work")
+	}
+}
+
+func TestParseCookieSetArgs_WithDomain(t *testing.T) {
+	param, err := parseCookieSetArgs([]string{"myname", "myvalue", "--domain", ".example.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if param.Name != "myname" {
+		t.Errorf("name = %q, want %q", param.Name, "myname")
+	}
+	if param.Value != "myvalue" {
+		t.Errorf("value = %q, want %q", param.Value, "myvalue")
+	}
+	if param.Domain != ".example.com" {
+		t.Errorf("domain = %q, want %q", param.Domain, ".example.com")
+	}
+}
+
+func TestParseCookieSetArgs_WithURL(t *testing.T) {
+	param, err := parseCookieSetArgs([]string{"n", "v", "--url", "https://example.com/path"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if param.URL != "https://example.com/path" {
+		t.Errorf("url = %q, want %q", param.URL, "https://example.com/path")
+	}
+	if param.Domain != "" {
+		t.Errorf("domain should be empty when --url used, got %q", param.Domain)
+	}
+}
+
+func TestParseCookieSetArgs_AllFlags(t *testing.T) {
+	param, err := parseCookieSetArgs([]string{
+		"tok", "val",
+		"--domain", ".example.com",
+		"--path", "/api",
+		"--secure",
+		"--httponly",
+		"--samesite", "Strict",
+		"--expires", "1735689600",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if param.Path != "/api" {
+		t.Errorf("path = %q, want %q", param.Path, "/api")
+	}
+	if !param.Secure {
+		t.Error("expected secure=true")
+	}
+	if !param.HTTPOnly {
+		t.Error("expected httponly=true")
+	}
+	if param.SameSite != proto.NetworkCookieSameSiteStrict {
+		t.Errorf("samesite = %q, want Strict", param.SameSite)
+	}
+	if param.Expires == 0 {
+		t.Error("expected expires to be set")
+	}
+}
+
+func TestParseCookieSetArgs_TooFewArgs(t *testing.T) {
+	_, err := parseCookieSetArgs([]string{"name"})
+	if err == nil {
+		t.Error("expected error for too few args")
+	}
+}
+
+func TestCookieGet_ByName(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name:  "find_me",
+		Value: "here",
+		URL:   env.server.URL + "/",
+	})
+
+	cookies := getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	val := ""
+	for _, c := range cookies {
+		if c.Name == "find_me" {
+			val = c.Value
+			break
+		}
+	}
+	if val != "here" {
+		t.Errorf("expected cookie value %q, got %q", "here", val)
+	}
+}
+
+func TestCookieGet_All(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "c1", Value: "v1", URL: env.server.URL + "/",
+	})
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "c2", Value: "v2", URL: env.server.URL + "/",
+	})
+
+	cookies := getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	names := map[string]bool{}
+	for _, c := range cookies {
+		names[c.Name] = true
+	}
+	if !names["c1"] || !names["c2"] {
+		t.Errorf("expected both c1 and c2 cookies, got: %v", names)
+	}
+}
+
+func TestCookieGet_JSON(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "json_test", Value: "jval", URL: env.server.URL + "/",
+	})
+
+	cookies := getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	out := formatCookiesJSON(cookies)
+	var parsed []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("JSON output is not valid: %v\noutput: %s", err, out)
+	}
+	if len(parsed) == 0 {
+		t.Fatal("expected at least one cookie in JSON output")
+	}
+	found := false
+	for _, c := range parsed {
+		if c["name"] == "json_test" && c["value"] == "jval" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("cookie json_test not found in JSON output: %s", out)
+	}
+}
+
+func TestCookieGet_FormatDefault(t *testing.T) {
+	cookies := []*proto.NetworkCookie{
+		{
+			Name:     "sess",
+			Value:    "abc",
+			Domain:   ".example.com",
+			Path:     "/",
+			Secure:   true,
+			HTTPOnly: true,
+			Session:  false,
+			Expires:  proto.TimeSinceEpoch(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC).Unix()),
+		},
+		{
+			Name:    "theme",
+			Value:   "dark",
+			Domain:  ".example.com",
+			Path:    "/",
+			Session: true,
+		},
+	}
+	out := formatCookiesDefault(cookies)
+	if !strings.Contains(out, "sess") {
+		t.Errorf("output should contain 'sess', got:\n%s", out)
+	}
+	if !strings.Contains(out, "secure") {
+		t.Errorf("output should contain 'secure' flag, got:\n%s", out)
+	}
+	if !strings.Contains(out, "httponly") {
+		t.Errorf("output should contain 'httponly' flag, got:\n%s", out)
+	}
+	if !strings.Contains(out, "session") {
+		t.Errorf("output should contain 'session' for session cookie, got:\n%s", out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Errorf("expected 2 lines, got %d:\n%s", len(lines), out)
+	}
+}
+
+func TestCookieDelete_ByName(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "delete_me", Value: "gone", URL: env.server.URL + "/",
+	})
+
+	// Verify it exists
+	cookies := getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	found := false
+	for _, c := range cookies {
+		if c.Name == "delete_me" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("cookie should exist before deletion")
+	}
+
+	// Delete it
+	deleteCookieFromBrowser(page, "delete_me", "", "", "")
+
+	// Verify it's gone
+	cookies = getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	for _, c := range cookies {
+		if c.Name == "delete_me" {
+			t.Errorf("cookie delete_me should have been deleted")
+		}
+	}
+}
+
+func TestCookieDelete_WithDomain(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "scoped", Value: "v1", URL: env.server.URL + "/",
+	})
+
+	// Delete with domain filter
+	deleteCookieFromBrowser(page, "scoped", "127.0.0.1", "", "")
+
+	cookies := getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	for _, c := range cookies {
+		if c.Name == "scoped" {
+			t.Errorf("cookie scoped should have been deleted")
+		}
+	}
+}
+
+func TestCookieClear(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "a", Value: "1", URL: env.server.URL + "/",
+	})
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "b", Value: "2", URL: env.server.URL + "/",
+	})
+
+	// Clear all
+	err := proto.NetworkClearBrowserCookies{}.Call(page)
+	if err != nil {
+		t.Fatalf("clear cookies failed: %v", err)
+	}
+
+	cookies := getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	if len(cookies) != 0 {
+		t.Errorf("expected 0 cookies after clear, got %d", len(cookies))
+	}
+}
+
+func TestCookieClear_WithDomain(t *testing.T) {
+	page := navigateTo(t, "/")
+	clearCookies(t, page)
+
+	// Set cookies on two different domains
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "keep", Value: "yes", URL: env.server.URL + "/",
+	})
+	setCookieOnBrowser(page, &proto.NetworkCookieParam{
+		Name: "remove", Value: "bye", URL: "https://other.example.com/",
+	})
+
+	// Clear only other.example.com
+	clearCookiesForDomain(page, "other.example.com")
+
+	// Cookie on test server should still exist
+	cookies := getCookiesFromBrowser(page, []string{env.server.URL + "/"})
+	found := false
+	for _, c := range cookies {
+		if c.Name == "keep" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("cookie 'keep' on test server should still exist after clearing other domain")
+	}
+
+	// Cookie on other.example.com should be gone
+	cookies = getCookiesFromBrowser(page, []string{"https://other.example.com/"})
+	for _, c := range cookies {
+		if c.Name == "remove" {
+			t.Error("cookie 'remove' on other.example.com should have been cleared")
+		}
+	}
+}
+
+func TestParseCookieGetArgs(t *testing.T) {
+	name, urls, jsonOut := parseCookieGetArgs([]string{"mysess", "--domain", "example.com", "--json"})
+	if name != "mysess" {
+		t.Errorf("name = %q, want %q", name, "mysess")
+	}
+	if len(urls) != 1 || urls[0] != "https://example.com/" {
+		t.Errorf("urls = %v, want [https://example.com/]", urls)
+	}
+	if !jsonOut {
+		t.Error("expected json=true")
+	}
+}
+
+func TestParseCookieGetArgs_URLFlag(t *testing.T) {
+	name, urls, _ := parseCookieGetArgs([]string{"--url", "https://api.example.com/v1"})
+	if name != "" {
+		t.Errorf("name = %q, want empty", name)
+	}
+	if len(urls) != 1 || urls[0] != "https://api.example.com/v1" {
+		t.Errorf("urls = %v, want [https://api.example.com/v1]", urls)
+	}
+}
+
+func TestParseCookieGetArgs_NoArgs(t *testing.T) {
+	name, urls, jsonOut := parseCookieGetArgs(nil)
+	if name != "" {
+		t.Errorf("name = %q, want empty", name)
+	}
+	if len(urls) != 0 {
+		t.Errorf("urls = %v, want empty", urls)
+	}
+	if jsonOut {
+		t.Error("expected json=false")
+	}
+}
+
+func TestParseCookieDeleteArgs(t *testing.T) {
+	name, domain, url, path, err := parseCookieDeleteArgs([]string{"sess", "--domain", ".example.com", "--path", "/app"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "sess" {
+		t.Errorf("name = %q, want %q", name, "sess")
+	}
+	if domain != ".example.com" {
+		t.Errorf("domain = %q, want %q", domain, ".example.com")
+	}
+	if url != "" {
+		t.Errorf("url = %q, want empty", url)
+	}
+	if path != "/app" {
+		t.Errorf("path = %q, want %q", path, "/app")
+	}
+}
+
+func TestParseCookieDeleteArgs_NoName(t *testing.T) {
+	_, _, _, _, err := parseCookieDeleteArgs(nil)
+	if err == nil {
+		t.Error("expected error when no name provided")
+	}
+}
+
+func TestParseCookieDeleteArgs_URLFlag(t *testing.T) {
+	name, domain, url, _, err := parseCookieDeleteArgs([]string{"sess", "--url", "https://example.com/app"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "sess" {
+		t.Errorf("name = %q, want %q", name, "sess")
+	}
+	if domain != "" {
+		t.Errorf("domain = %q, want empty", domain)
+	}
+	if url != "https://example.com/app" {
+		t.Errorf("url = %q, want %q", url, "https://example.com/app")
+	}
+}
