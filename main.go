@@ -38,7 +38,7 @@ var helpText string
 // version is the devskale fork version. Overridable via -ldflags "-X main.version=..."
 // for tagged releases, but the default keeps fork builds distinguishable from
 // upstream (which reports plain "dev").
-var version = "0.6.0" // devskale fork
+var version = "0.6.1" // devskale fork
 
 // scopeMode determines whether to use a local or global state directory.
 type scopeMode int
@@ -121,6 +121,17 @@ func statePath() string {
 	return filepath.Join(stateDir(), "state.json")
 }
 
+// chromeBin returns the Chrome/Chromium binary path to use.
+// Prefers JODNEY_CHROME_BIN, falling back to ROD_CHROME_BIN (the go-rod
+// library convention) for compatibility. Returns "" if neither is set,
+// meaning go-rod's default discovery is used.
+func chromeBin() string {
+	if bin := os.Getenv("JODNEY_CHROME_BIN"); bin != "" {
+		return bin
+	}
+	return os.Getenv("ROD_CHROME_BIN")
+}
+
 func loadState() (*State, error) {
 	data, err := os.ReadFile(statePath())
 	if err != nil {
@@ -177,6 +188,77 @@ func printUsage() {
 	fmt.Print(helpText)
 }
 
+// commandUsage maps each command to its one-line usage string, used for
+// per-command `jodney <cmd> --help` output.
+var commandUsage = map[string]string{
+	"start":         "jodney start [--show] [--insecure|-k] [--local]",
+	"connect":       "jodney connect <host:port>",
+	"stop":          "jodney stop",
+	"status":        "jodney status",
+	"open":          "jodney open <url>",
+	"back":          "jodney back",
+	"forward":       "jodney forward",
+	"reload":        "jodney reload [--hard]",
+	"clear-cache":   "jodney clear-cache",
+	"url":           "jodney url",
+	"title":         "jodney title",
+	"html":          "jodney html [selector]",
+	"text":          "jodney text <selector>",
+	"attr":          "jodney attr <selector> <attribute>",
+	"pdf":           "jodney pdf [file]",
+	"js":            "jodney js <expression>",
+	"click":         "jodney click <selector>",
+	"input":         "jodney input <selector> <text>",
+	"clear":         "jodney clear <selector>",
+	"select":        "jodney select <selector> <value>",
+	"submit":        "jodney submit <selector>",
+	"hover":         "jodney hover <selector>",
+	"file":          "jodney file <selector> <path|->",
+	"download":      "jodney download <selector> [file|-]",
+	"focus":         "jodney focus <selector>",
+	"wait":          "jodney wait <selector>",
+	"waitload":      "jodney waitload",
+	"waitstable":    "jodney waitstable",
+	"waitidle":      "jodney waitidle",
+	"sleep":         "jodney sleep <seconds>",
+	"screenshot":    "jodney screenshot [-w N] [-h N] [file]",
+	"screenshot-el": "jodney screenshot-el <selector> [file]",
+	"start-video":   "jodney start-video",
+	"stop-video":    "jodney stop-video [file]",
+	"pages":         "jodney pages",
+	"page":          "jodney page <index>",
+	"newpage":       "jodney newpage [url]",
+	"closepage":     "jodney closepage [index]",
+	"exists":        "jodney exists <selector>",
+	"count":         "jodney count <selector>",
+	"visible":       "jodney visible <selector>",
+	"assert":        "jodney assert <js-expression> [expected] [--message msg]",
+	"ua":            "jodney ua <user-agent-string>",
+	"timezone":      "jodney timezone <timezone-id>",
+	"locale":        "jodney locale <locale>",
+	"geo":           "jodney geo --lat <lat> --lon <lon>",
+	"media":         "jodney media [--type T] [--feature name=value ...]",
+	"ax-tree":       "jodney ax-tree [--depth N] [--json]",
+	"ax-find":       "jodney ax-find [--name N] [--role R] [--json]",
+	"ax-node":       "jodney ax-node <selector> [--json]",
+	"cookie-set":    "jodney cookie-set <name> <value> [opts]",
+	"cookie-get":    "jodney cookie-get [name] [--json]",
+	"cookie-delete": "jodney cookie-delete <name> [opts]",
+	"cookie-clear":  "jodney cookie-clear [--domain <domain>]",
+	"mock":          "jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
+	"block":         "jodney block <pattern> [--method M]",
+}
+
+// containsHelpFlag reports whether args contains a --help request.
+func containsHelpFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
 func fatal(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
 	os.Exit(2)
@@ -227,6 +309,24 @@ func main() {
 	if cmd == "--version" {
 		fmt.Println(version)
 		os.Exit(0)
+	}
+
+	if cmd == "--update" {
+		cmdUpdate(args)
+	}
+
+	// Per-command help: if the command is known and --help is present among
+	// its args (or the command itself is a help request), print that command's
+	// usage line instead of dispatching. This gives a uniform, friendly
+	// `jodney <cmd> --help` for every command, including flag-based ones that
+	// would otherwise choke on the flag parser. `-h` is intentionally NOT
+	// treated as help here because some commands (e.g. screenshot) use it as a
+	// flag alias.
+	if cmdUsage, known := commandUsage[cmd]; known {
+		if containsHelpFlag(args) {
+			fmt.Printf("Usage: %s\n", cmdUsage)
+			os.Exit(0)
+		}
 	}
 
 	switch cmd {
@@ -280,6 +380,10 @@ func main() {
 		cmdFile(args)
 	case "download":
 		cmdDownload(args)
+	case "mock":
+		cmdMock(args)
+	case "block":
+		cmdBlock(args)
 	case "focus":
 		cmdFocus(args)
 	case "wait":
@@ -353,11 +457,25 @@ func main() {
 // Default timeout for element queries (seconds)
 var defaultTimeout = 30 * time.Second
 
+// timeoutSeconds returns the element-query default timeout in seconds.
+// Prefers JODNEY_TIMEOUT, falling back to ROD_TIMEOUT (the go-rod library
+// convention) for compatibility. Returns 0 if neither is set, meaning the
+// package-level defaultTimeout is kept.
+func timeoutSeconds() float64 {
+	t := os.Getenv("JODNEY_TIMEOUT")
+	if t == "" {
+		t = os.Getenv("ROD_TIMEOUT")
+	}
+	secs, err := strconv.ParseFloat(t, 64)
+	if err != nil {
+		return 0
+	}
+	return secs
+}
+
 func init() {
-	if t := os.Getenv("ROD_TIMEOUT"); t != "" {
-		if secs, err := strconv.ParseFloat(t, 64); err == nil {
-			defaultTimeout = time.Duration(secs * float64(time.Second))
-		}
+	if secs := timeoutSeconds(); secs > 0 {
+		defaultTimeout = time.Duration(secs * float64(time.Second))
 	}
 }
 
@@ -418,6 +536,70 @@ func parseStartArgs(args []string) (ignoreCertErrors bool, headless bool, err er
 	return ignoreCertErrors, headless, nil
 }
 
+// cmdUpdate rebuilds the jodney binary from upstream source. It clones the
+// repo into a standard location if needed, pulls the latest, builds into the
+// directory that currently holds the running binary, and exits.
+//
+// The binary is built from source (jodney is not published to PyPI), so this
+// is the supported way to self-update. It requires git and Go on PATH.
+func cmdUpdate(args []string) {
+	// Resolve the path of the currently running binary.
+	exe, err := os.Executable()
+	if err != nil {
+		fatal("cannot locate jodney binary: %v", err)
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+
+	// The source repo lives next to the binary (repo/ = bin dir's parent's
+	// child), or in a few well-known locations. Prefer a sibling repo dir.
+	repo := ""
+	candidates := []string{
+		filepath.Join(filepath.Dir(exe), "..", "jodney"), // ~/.local/bin/../jodney
+		filepath.Join(filepath.Dir(exe), "jodney"),       // same dir as binary
+		filepath.Join(os.Getenv("HOME"), "src", "jodney"),
+		filepath.Join(os.Getenv("HOME"), "code", "clones", "jodney"),
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(filepath.Join(c, "go.mod")); err == nil && !fi.IsDir() {
+			repo = c
+			break
+		}
+	}
+
+	if repo == "" {
+		// No existing checkout — clone into ~/src/jodney (the documented location).
+		repo = filepath.Join(os.Getenv("HOME"), "src", "jodney")
+		if err := os.MkdirAll(filepath.Dir(repo), 0755); err != nil {
+			fatal("failed to create src dir: %v", err)
+		}
+		fmt.Printf("Cloning jodney into %s...\n", repo)
+		out, err := exec.Command("git", "clone", "git@github.com:devskale/jodney.git", repo).CombinedOutput()
+		if err != nil {
+			fatal("git clone failed: %v\n%s", err, out)
+		}
+	} else {
+		fmt.Printf("Updating %s...\n", repo)
+		out, err := exec.Command("git", "-C", repo, "pull", "--ff-only").CombinedOutput()
+		if err != nil {
+			fatal("git pull failed (is the repo clean?): %v\n%s", err, out)
+		}
+	}
+
+	// Build into the same directory as the current binary so PATH stays valid.
+	dest := filepath.Join(filepath.Dir(exe), "jodney")
+	fmt.Printf("Building %s...\n", dest)
+	buildCmd := exec.Command("go", "build", "-o", dest, ".")
+	buildCmd.Dir = repo
+	out, err := buildCmd.CombinedOutput()
+	if err != nil {
+		fatal("go build failed: %v\n%s", err, out)
+	}
+
+	// Verify the new binary reports a version.
+	newVer, _ := exec.Command(dest, "--version").Output()
+	fmt.Printf("Updated to %s", newVer)
+}
+
 func cmdStart(args []string) {
 	ignoreCertErrors, headless, err := parseStartArgs(args)
 	if err != nil {
@@ -451,7 +633,7 @@ func cmdStart(args []string) {
 		l = l.Delete("no-startup-window")
 	}
 
-	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
+	if bin := chromeBin(); bin != "" {
 		l = l.Bin(bin)
 	}
 
@@ -1046,6 +1228,114 @@ func inferDownloadFilename(urlStr string) string {
 		}
 	}
 	return nextAvailableFile("download", "")
+}
+
+// cmdMock intercepts requests matching a URL pattern and serves a canned
+// response instead of hitting the real server. It runs as a persistent
+// foreground command: the interception router stays alive until the process
+// is interrupted (Ctrl+C / SIGTERM), so other jodney commands in separate
+// shells can drive the browser while the mock is active.
+//
+// Usage:
+//
+//	jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]
+//
+// pattern is a glob-style URL pattern (e.g. "*api.example.com/users*"),
+// response is the body text to serve (or "-file=<path>" to read a file),
+// and optional flags set the HTTP status, Content-Type, and request method
+// to match. If --method is given, only requests with that method are mocked.
+func cmdMock(args []string) {
+	fs := flag.NewFlagSet("mock", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	status := fs.Int("status", 200, "")
+	contentType := fs.String("type", "text/plain", "")
+	method := fs.String("method", "", "")
+
+	if err := fs.Parse(args); err != nil {
+		fatal("%v", err)
+	}
+	rest := fs.Args()
+	if len(rest) < 2 {
+		fatal("usage: jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]")
+	}
+	pattern := rest[0]
+	body := rest[1]
+
+	if strings.HasPrefix(body, "-file=") {
+		data, err := os.ReadFile(strings.TrimPrefix(body, "-file="))
+		if err != nil {
+			fatal("failed to read response file: %v", err)
+		}
+		body = string(data)
+	}
+
+	_, _, page := withPage()
+	router := page.HijackRequests()
+
+	if err := router.Add(pattern, "", func(h *rod.Hijack) {
+		if *method != "" && h.Request.Method() != *method {
+			h.ContinueRequest(&proto.FetchContinueRequest{})
+			return
+		}
+		h.Response.SetHeader("Content-Type", *contentType).SetBody(body)
+		h.Response.Payload().ResponseCode = *status
+	}); err != nil {
+		fatal("failed to install mock: %v", err)
+	}
+
+	router.Run()
+	defer func() { _ = router.Stop() }()
+
+	fmt.Printf("Mocking %s -> %d %s (Ctrl+C to stop)\n", pattern, *status, *contentType)
+
+	// Keep the router alive until interrupted.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+}
+
+// cmdBlock intercepts requests matching a URL pattern and fails them client-
+// side, so the browser never reaches the real server. Like cmdMock it runs as
+// a persistent foreground command until interrupted.
+//
+// Usage:
+//
+//	jodney block <pattern> [--method M]
+func cmdBlock(args []string) {
+	fs := flag.NewFlagSet("block", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	method := fs.String("method", "", "")
+
+	if err := fs.Parse(args); err != nil {
+		fatal("%v", err)
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		fatal("usage: jodney block <pattern> [--method M]")
+	}
+	pattern := rest[0]
+
+	_, _, page := withPage()
+	router := page.HijackRequests()
+
+	if err := router.Add(pattern, "", func(h *rod.Hijack) {
+		if *method != "" && h.Request.Method() != *method {
+			h.ContinueRequest(&proto.FetchContinueRequest{})
+			return
+		}
+		h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+	}); err != nil {
+		fatal("failed to install blocker: %v", err)
+	}
+
+	router.Run()
+	defer func() { _ = router.Stop() }()
+
+	fmt.Printf("Blocking %s (Ctrl+C to stop)\n", pattern)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
 }
 
 // mimeToExt returns a file extension for common MIME types.

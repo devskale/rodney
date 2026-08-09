@@ -34,7 +34,7 @@ go build -o jodney .
 
 Requires:
 - Go 1.21+
-- Google Chrome or Chromium installed (or set `ROD_CHROME_BIN=/path/to/chrome`)
+- Google Chrome or Chromium installed (or set `JODNEY_CHROME_BIN=/path/to/chrome`)
 
 ## Usage
 
@@ -170,6 +170,29 @@ if unnamed:
 print(f'PASS: all {len(buttons)} buttons have accessible names')
 "
 ```
+
+### Network interception
+
+Jodney can intercept network requests to mock API responses or block requests entirely. Because a request has to be answered while the interception router is alive, these commands run as **persistent foreground processes** — start them in one shell, drive the browser from another, and stop with Ctrl+C.
+
+```bash
+# Serve a canned response for any request matching a URL pattern
+jodney mock "*api.example.com/users*" '{"id": 1, "name": "Mock"}' --type application/json
+
+# Custom status code and request-method filter
+jodney mock "*api.example.com/login*" '{"error": "offline"}' --status 503 --method POST
+
+# Read the response body from a file
+jodney mock "*example.com/config*" -file=config.json --type application/json
+
+# Fail matching requests client-side (e.g. to test offline behaviour)
+jodney block "*.jpg" "*.gif"
+jodney block "*api.example.com*" --method POST
+```
+
+The `pattern` is a glob-style URL pattern (e.g. `*api.example.com/users*`). `--method` restricts interception to a specific HTTP method; without it, all methods match. `mock` defaults to status `200` and `text/plain`; override with `--status` and `--type`.
+
+This builds on rod's [request hijacking](https://github.com/go-rod/rod) (`Fetch` CDP domain). Use it to test error states, offline behaviour, or to stub third-party APIs in CI.
 
 ### Directory-scoped sessions
 
@@ -365,8 +388,8 @@ This pattern is useful in CI — run Jodney as a post-deploy check, an accessibi
 | Environment Variable | Default | Description |
 |---|---|---|
 | `JODNEY_HOME` | `~/.jodney` | Data directory for state and Chrome profile |
-| `ROD_CHROME_BIN` | `/usr/bin/google-chrome` | Path to Chrome/Chromium binary |
-| `ROD_TIMEOUT` | `30` | Default timeout in seconds for element queries |
+| `JODNEY_CHROME_BIN` | auto | Path to Chrome/Chromium binary (falls back to `ROD_CHROME_BIN`) |
+| `JODNEY_TIMEOUT` | `30` | Default timeout in seconds for element queries (falls back to `ROD_TIMEOUT`) |
 | `HTTPS_PROXY` / `HTTP_PROXY` | (none) | Authenticated proxy auto-detected on start |
 
 Global state is stored in `~/.jodney/state.json` with Chrome user data in `~/.jodney/chrome-data/`. When using `--local`, state is stored in `./.jodney/state.json` and `./.jodney/chrome-data/` in the current directory instead. Set `JODNEY_HOME` to override the default global directory.
@@ -446,6 +469,8 @@ The tool uses the [rod](https://github.com/go-rod/rod) Go library which communic
 | `ax-tree` | `[--depth N] [--json]` | Dump accessibility tree |
 | `ax-find` | `[--name N] [--role R] [--json]` | Find accessible nodes |
 | `ax-node` | `<selector> [--json]` | Show element accessibility info |
+| `mock` | `<pattern> <response> [--status N] [--type MIME] [--method M]` | Serve canned response for matching requests (persistent) |
+| `block` | `<pattern> [--method M]` | Fail matching requests client-side (persistent) |
 
 ### Global flags
 
@@ -454,4 +479,5 @@ The tool uses the [rod](https://github.com/go-rod/rod) Go library which communic
 | `--local` | Use directory-scoped session (`./.jodney/`) |
 | `--global` | Use global session (`~/.jodney/`) |
 | `--version` | Print version and exit |
+| `--update` | Rebuild the binary from upstream source (git clone/pull + `go build`) |
 | `--help`, `-h`, `help` | Show help message |

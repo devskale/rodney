@@ -74,6 +74,14 @@ Emulation:
   jodney media [--type T] [--feature name=value ...]
                                     Emulate media type or features
 
+Network interception:
+  jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]
+                                    Serve a canned response for matching
+                                    requests (persistent until Ctrl+C)
+  jodney block <pattern> [--method M]
+                                    Fail matching requests client-side
+                                    (persistent until Ctrl+C)
+
 Accessibility:
   jodney ax-tree [--depth N] [--json]       Dump accessibility tree
   jodney ax-find [--name N] [--role R] [--json]  Find accessible nodes
@@ -83,6 +91,7 @@ Options:
   --local                         Use directory-scoped session (./.jodney/)
   --global                        Use global session (~/.jodney/)
   --version                       Print version and exit
+  --update                        Rebuild the binary from upstream source
   --help, -h, help                Show this help message
 
 By default, commands auto-detect: if ./.jodney/state.json exists in the

@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 		Headless(true).
 		Leakless(false)
 
-	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
+	if bin := chromeBin(); bin != "" {
 		l = l.Bin(bin)
 	}
 
@@ -767,6 +767,50 @@ func TestStateDir_EnvVar(t *testing.T) {
 	got := stateDir()
 	if got != dir {
 		t.Errorf("stateDir() = %q, want %q", got, dir)
+	}
+}
+
+func TestChromeBin(t *testing.T) {
+	t.Setenv("JODNEY_CHROME_BIN", "")
+	t.Setenv("ROD_CHROME_BIN", "")
+	if got := chromeBin(); got != "" {
+		t.Errorf("chromeBin() with neither set = %q, want \"\"", got)
+	}
+
+	t.Setenv("JODNEY_CHROME_BIN", "/usr/bin/jodney-chrome")
+	t.Setenv("ROD_CHROME_BIN", "/usr/bin/rod-chrome")
+	if got := chromeBin(); got != "/usr/bin/jodney-chrome" {
+		t.Errorf("chromeBin() should prefer JODNEY_CHROME_BIN, got %q", got)
+	}
+
+	t.Setenv("JODNEY_CHROME_BIN", "")
+	if got := chromeBin(); got != "/usr/bin/rod-chrome" {
+		t.Errorf("chromeBin() should fall back to ROD_CHROME_BIN, got %q", got)
+	}
+}
+
+func TestTimeoutSeconds(t *testing.T) {
+	t.Setenv("JODNEY_TIMEOUT", "")
+	t.Setenv("ROD_TIMEOUT", "")
+	if got := timeoutSeconds(); got != 0 {
+		t.Errorf("timeoutSeconds() with neither set = %v, want 0", got)
+	}
+
+	t.Setenv("JODNEY_TIMEOUT", "12.5")
+	t.Setenv("ROD_TIMEOUT", "99")
+	if got := timeoutSeconds(); got != 12.5 {
+		t.Errorf("timeoutSeconds() should prefer JODNEY_TIMEOUT, got %v", got)
+	}
+
+	t.Setenv("JODNEY_TIMEOUT", "")
+	if got := timeoutSeconds(); got != 99 {
+		t.Errorf("timeoutSeconds() should fall back to ROD_TIMEOUT, got %v", got)
+	}
+
+	t.Setenv("JODNEY_TIMEOUT", "not-a-number")
+	t.Setenv("ROD_TIMEOUT", "")
+	if got := timeoutSeconds(); got != 0 {
+		t.Errorf("timeoutSeconds() with invalid value = %v, want 0", got)
 	}
 }
 
@@ -1504,7 +1548,7 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 			Headless(true).
 			Leakless(false)
 
-		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
+		if bin := chromeBin(); bin != "" {
 			l = l.Bin(bin)
 		}
 
@@ -1534,7 +1578,7 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 			Headless(true).
 			Leakless(false)
 
-		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
+		if bin := chromeBin(); bin != "" {
 			l = l.Bin(bin)
 		}
 
@@ -2659,5 +2703,160 @@ func TestStopVideo_DetectsGIFExtension(t *testing.T) {
 	f.Close()
 	if string(header[:3]) != "GIF" {
 		t.Errorf("expected GIF file for .gif extension, got header: %q", string(header))
+	}
+}
+
+// =====================
+// Network interception tests (mock / block)
+// =====================
+
+// TestMockResponse verifies that a hijack router installed on a page can
+// serve a canned response for a matching request, overriding the real server.
+func TestMockResponse(t *testing.T) {
+	page := env.browser.MustPage(env.server.URL + "/empty")
+	t.Cleanup(func() { page.MustClose() })
+
+	router := page.HijackRequests()
+	pattern := env.server.URL + "/testfile.txt"
+	if err := router.Add(pattern, "", func(h *rod.Hijack) {
+		h.Response.SetHeader("Content-Type", "text/plain").SetBody("MOCKED")
+		h.Response.Payload().ResponseCode = 200
+	}); err != nil {
+		t.Fatalf("router.Add failed: %v", err)
+	}
+	go router.Run()
+	t.Cleanup(func() { _ = router.Stop() })
+
+	// Fetch the endpoint that would normally return "Hello World" from the server.
+	res, err := page.Eval(`async () => {
+		const r = await fetch("/testfile.txt");
+		return { status: r.status, text: await r.text() };
+	}`)
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+	status := int(res.Value.Get("status").Num())
+	text := res.Value.Get("text").Str()
+	if status != 200 {
+		t.Errorf("expected status 200, got %d", status)
+	}
+	if text != "MOCKED" {
+		t.Errorf("expected mocked body 'MOCKED', got %q", text)
+	}
+}
+
+// TestMockMethodFilter verifies that a mock only applies when the request
+// method matches, and other methods pass through to the real server.
+func TestMockMethodFilter(t *testing.T) {
+	page := env.browser.MustPage(env.server.URL + "/empty")
+	t.Cleanup(func() { page.MustClose() })
+
+	router := page.HijackRequests()
+	pattern := env.server.URL + "/testfile.txt"
+	if err := router.Add(pattern, "", func(h *rod.Hijack) {
+		if h.Request.Method() != "POST" {
+			h.ContinueRequest(&proto.FetchContinueRequest{})
+			return
+		}
+		h.Response.SetHeader("Content-Type", "text/plain").SetBody("MOCKED")
+		h.Response.Payload().ResponseCode = 200
+	}); err != nil {
+		t.Fatalf("router.Add failed: %v", err)
+	}
+	go router.Run()
+	t.Cleanup(func() { _ = router.Stop() })
+
+	// GET should pass through to the real server ("Hello World").
+	getRes, err := page.Eval(`async () => {
+		const r = await fetch("/testfile.txt");
+		return { status: r.status, text: await r.text() };
+	}`)
+	if err != nil {
+		t.Fatalf("GET fetch failed: %v", err)
+	}
+	if getRes.Value.Get("text").Str() != "Hello World" {
+		t.Errorf("expected passthrough 'Hello World', got %q", getRes.Value.Get("text").Str())
+	}
+
+	// POST should be mocked.
+	postRes, err := page.Eval(`async () => {
+		const r = await fetch("/testfile.txt", { method: "POST" });
+		return { status: r.status, text: await r.text() };
+	}`)
+	if err != nil {
+		t.Fatalf("POST fetch failed: %v", err)
+	}
+	if postRes.Value.Get("text").Str() != "MOCKED" {
+		t.Errorf("expected mocked 'MOCKED' for POST, got %q", postRes.Value.Get("text").Str())
+	}
+}
+
+// TestBlockRequest verifies that a fail-on-match handler blocks the request
+// client-side so the real server is never reached.
+func TestBlockRequest(t *testing.T) {
+	page := env.browser.MustPage(env.server.URL + "/empty")
+	t.Cleanup(func() { page.MustClose() })
+
+	router := page.HijackRequests()
+	pattern := env.server.URL + "/testfile.txt"
+	if err := router.Add(pattern, "", func(h *rod.Hijack) {
+		h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+	}); err != nil {
+		t.Fatalf("router.Add failed: %v", err)
+	}
+	go router.Run()
+	t.Cleanup(func() { _ = router.Stop() })
+
+	_, err := page.Eval(`async () => {
+		try {
+			await fetch("/testfile.txt");
+			return "ok";
+		} catch (e) {
+			return "blocked";
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("fetch eval failed: %v", err)
+	}
+}
+
+// =====================
+// Per-command help tests
+// =====================
+
+func TestContainsHelpFlag(t *testing.T) {
+	if !containsHelpFlag([]string{"--help"}) {
+		t.Error("expected --help to be detected")
+	}
+	if !containsHelpFlag([]string{"open", "https://example.com", "--help"}) {
+		t.Error("expected --help anywhere in args to be detected")
+	}
+	if containsHelpFlag(nil) {
+		t.Error("expected no --help in empty args")
+	}
+	if containsHelpFlag([]string{"-h"}) {
+		t.Error("expected -h to NOT be treated as help (it is a flag alias in some commands)")
+	}
+	if containsHelpFlag([]string{"open", "https://example.com"}) {
+		t.Error("expected no --help in normal args")
+	}
+}
+
+func TestCommandUsageMap(t *testing.T) {
+	// Every dispatched command should have a usage entry so --help works for it.
+	commands := []string{
+		"start", "connect", "stop", "status", "open", "back", "forward", "reload",
+		"clear-cache", "url", "title", "html", "text", "attr", "pdf", "js", "click",
+		"input", "clear", "select", "submit", "hover", "file", "download", "focus",
+		"wait", "waitload", "waitstable", "waitidle", "sleep", "screenshot",
+		"screenshot-el", "start-video", "stop-video", "pages", "page", "newpage",
+		"closepage", "exists", "count", "visible", "assert", "ua", "timezone",
+		"locale", "geo", "media", "ax-tree", "ax-find", "ax-node", "cookie-set",
+		"cookie-get", "cookie-delete", "cookie-clear", "mock", "block",
+	}
+	for _, c := range commands {
+		if _, ok := commandUsage[c]; !ok {
+			t.Errorf("commandUsage missing entry for %q", c)
+		}
 	}
 }

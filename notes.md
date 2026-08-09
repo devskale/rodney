@@ -40,7 +40,7 @@
 - `page.Element(selector)` waits indefinitely for the element to appear
 - This is by design (rod auto-waits) but causes CLI to hang for missing elements
 - Solution: `page.Timeout(duration)` creates a page clone with a context deadline
-- `ROD_TIMEOUT` env var controls the default (30 seconds)
+- `JODNEY_TIMEOUT` env var controls the default (30 seconds)
 
 ### Network issues
 - External URLs fail with `net::ERR_TUNNEL_CONNECTION_FAILED` in this environment
