@@ -121,17 +121,6 @@ func statePath() string {
 	return filepath.Join(stateDir(), "state.json")
 }
 
-// chromeBin returns the Chrome/Chromium binary path to use.
-// Prefers RODNEY_CHROME_BIN, falling back to ROD_CHROME_BIN (the go-rod
-// library convention) for compatibility. Returns "" if neither is set,
-// meaning go-rod's default discovery is used.
-func chromeBin() string {
-	if bin := os.Getenv("RODNEY_CHROME_BIN"); bin != "" {
-		return bin
-	}
-	return os.Getenv("ROD_CHROME_BIN")
-}
-
 func loadState() (*State, error) {
 	data, err := os.ReadFile(statePath())
 	if err != nil {
@@ -311,10 +300,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	if cmd == "--update" {
-		cmdUpdate(args)
-	}
-
 	// Per-command help: if the command is known and --help is present among
 	// its args (or the command itself is a help request), print that command's
 	// usage line instead of dispatching. This gives a uniform, friendly
@@ -457,25 +442,11 @@ func main() {
 // Default timeout for element queries (seconds)
 var defaultTimeout = 30 * time.Second
 
-// timeoutSeconds returns the element-query default timeout in seconds.
-// Prefers RODNEY_TIMEOUT, falling back to ROD_TIMEOUT (the go-rod library
-// convention) for compatibility. Returns 0 if neither is set, meaning the
-// package-level defaultTimeout is kept.
-func timeoutSeconds() float64 {
-	t := os.Getenv("RODNEY_TIMEOUT")
-	if t == "" {
-		t = os.Getenv("ROD_TIMEOUT")
-	}
-	secs, err := strconv.ParseFloat(t, 64)
-	if err != nil {
-		return 0
-	}
-	return secs
-}
-
 func init() {
-	if secs := timeoutSeconds(); secs > 0 {
-		defaultTimeout = time.Duration(secs * float64(time.Second))
+	if t := os.Getenv("ROD_TIMEOUT"); t != "" {
+		if secs, err := strconv.ParseFloat(t, 64); err == nil {
+			defaultTimeout = time.Duration(secs * float64(time.Second))
+		}
 	}
 }
 
@@ -536,70 +507,6 @@ func parseStartArgs(args []string) (ignoreCertErrors bool, headless bool, err er
 	return ignoreCertErrors, headless, nil
 }
 
-// cmdUpdate rebuilds the rodney binary from upstream source. It clones the
-// repo into a standard location if needed, pulls the latest, builds into the
-// directory that currently holds the running binary, and exits.
-//
-// The binary is built from source (rodney is not published to PyPI), so this
-// is the supported way to self-update. It requires git and Go on PATH.
-func cmdUpdate(args []string) {
-	// Resolve the path of the currently running binary.
-	exe, err := os.Executable()
-	if err != nil {
-		fatal("cannot locate rodney binary: %v", err)
-	}
-	exe, _ = filepath.EvalSymlinks(exe)
-
-	// The source repo lives next to the binary (repo/ = bin dir's parent's
-	// child), or in a few well-known locations. Prefer a sibling repo dir.
-	repo := ""
-	candidates := []string{
-		filepath.Join(filepath.Dir(exe), "..", "rodney"), // ~/.local/bin/../rodney
-		filepath.Join(filepath.Dir(exe), "rodney"),       // same dir as binary
-		filepath.Join(os.Getenv("HOME"), "src", "rodney"),
-		filepath.Join(os.Getenv("HOME"), "code", "clones", "rodney"),
-	}
-	for _, c := range candidates {
-		if fi, err := os.Stat(filepath.Join(c, "go.mod")); err == nil && !fi.IsDir() {
-			repo = c
-			break
-		}
-	}
-
-	if repo == "" {
-		// No existing checkout — clone into ~/src/rodney (the documented location).
-		repo = filepath.Join(os.Getenv("HOME"), "src", "rodney")
-		if err := os.MkdirAll(filepath.Dir(repo), 0755); err != nil {
-			fatal("failed to create src dir: %v", err)
-		}
-		fmt.Printf("Cloning rodney into %s...\n", repo)
-		out, err := exec.Command("git", "clone", "git@github.com:devskale/rodney.git", repo).CombinedOutput()
-		if err != nil {
-			fatal("git clone failed: %v\n%s", err, out)
-		}
-	} else {
-		fmt.Printf("Updating %s...\n", repo)
-		out, err := exec.Command("git", "-C", repo, "pull", "--ff-only").CombinedOutput()
-		if err != nil {
-			fatal("git pull failed (is the repo clean?): %v\n%s", err, out)
-		}
-	}
-
-	// Build into the same directory as the current binary so PATH stays valid.
-	dest := filepath.Join(filepath.Dir(exe), "rodney")
-	fmt.Printf("Building %s...\n", dest)
-	buildCmd := exec.Command("go", "build", "-o", dest, ".")
-	buildCmd.Dir = repo
-	out, err := buildCmd.CombinedOutput()
-	if err != nil {
-		fatal("go build failed: %v\n%s", err, out)
-	}
-
-	// Verify the new binary reports a version.
-	newVer, _ := exec.Command(dest, "--version").Output()
-	fmt.Printf("Updated to %s", newVer)
-}
-
 func cmdStart(args []string) {
 	ignoreCertErrors, headless, err := parseStartArgs(args)
 	if err != nil {
@@ -633,7 +540,7 @@ func cmdStart(args []string) {
 		l = l.Delete("no-startup-window")
 	}
 
-	if bin := chromeBin(); bin != "" {
+	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 		l = l.Bin(bin)
 	}
 

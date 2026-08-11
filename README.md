@@ -34,7 +34,7 @@ go build -o rodney .
 
 Requires:
 - Go 1.21+
-- Google Chrome or Chromium installed (or set `RODNEY_CHROME_BIN=/path/to/chrome`)
+- Google Chrome or Chromium installed (or set `ROD_CHROME_BIN=/path/to/chrome`)
 
 ## Usage
 
@@ -479,5 +479,4 @@ The tool uses the [rod](https://github.com/go-rod/rod) Go library which communic
 | `--local` | Use directory-scoped session (`./.rodney/`) |
 | `--global` | Use global session (`~/.rodney/`) |
 | `--version` | Print version and exit |
-| `--update` | Rebuild the binary from upstream source (git clone/pull + `go build`) |
 | `--help`, `-h`, `help` | Show help message |

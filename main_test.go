@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 		Headless(true).
 		Leakless(false)
 
-	if bin := chromeBin(); bin != "" {
+	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 		l = l.Bin(bin)
 	}
 
@@ -770,49 +770,6 @@ func TestStateDir_EnvVar(t *testing.T) {
 	}
 }
 
-func TestChromeBin(t *testing.T) {
-	t.Setenv("RODNEY_CHROME_BIN", "")
-	t.Setenv("ROD_CHROME_BIN", "")
-	if got := chromeBin(); got != "" {
-		t.Errorf("chromeBin() with neither set = %q, want \"\"", got)
-	}
-
-	t.Setenv("RODNEY_CHROME_BIN", "/usr/bin/rodney-chrome")
-	t.Setenv("ROD_CHROME_BIN", "/usr/bin/rod-chrome")
-	if got := chromeBin(); got != "/usr/bin/rodney-chrome" {
-		t.Errorf("chromeBin() should prefer RODNEY_CHROME_BIN, got %q", got)
-	}
-
-	t.Setenv("RODNEY_CHROME_BIN", "")
-	if got := chromeBin(); got != "/usr/bin/rod-chrome" {
-		t.Errorf("chromeBin() should fall back to ROD_CHROME_BIN, got %q", got)
-	}
-}
-
-func TestTimeoutSeconds(t *testing.T) {
-	t.Setenv("RODNEY_TIMEOUT", "")
-	t.Setenv("ROD_TIMEOUT", "")
-	if got := timeoutSeconds(); got != 0 {
-		t.Errorf("timeoutSeconds() with neither set = %v, want 0", got)
-	}
-
-	t.Setenv("RODNEY_TIMEOUT", "12.5")
-	t.Setenv("ROD_TIMEOUT", "99")
-	if got := timeoutSeconds(); got != 12.5 {
-		t.Errorf("timeoutSeconds() should prefer RODNEY_TIMEOUT, got %v", got)
-	}
-
-	t.Setenv("RODNEY_TIMEOUT", "")
-	if got := timeoutSeconds(); got != 99 {
-		t.Errorf("timeoutSeconds() should fall back to ROD_TIMEOUT, got %v", got)
-	}
-
-	t.Setenv("RODNEY_TIMEOUT", "not-a-number")
-	t.Setenv("ROD_TIMEOUT", "")
-	if got := timeoutSeconds(); got != 0 {
-		t.Errorf("timeoutSeconds() with invalid value = %v, want 0", got)
-	}
-}
 
 func TestMimeToExt(t *testing.T) {
 	tests := []struct {
@@ -1548,7 +1505,7 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 			Headless(true).
 			Leakless(false)
 
-		if bin := chromeBin(); bin != "" {
+		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 			l = l.Bin(bin)
 		}
 
@@ -1578,7 +1535,7 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 			Headless(true).
 			Leakless(false)
 
-		if bin := chromeBin(); bin != "" {
+		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 			l = l.Bin(bin)
 		}
 

@@ -91,7 +91,6 @@ Options:
   --local                         Use directory-scoped session (./.rodney/)
   --global                        Use global session (~/.rodney/)
   --version                       Print version and exit
-  --update                        Rebuild the binary from upstream source
   --help, -h, help                Show this help message
 
 By default, commands auto-detect: if ./.rodney/state.json exists in the
