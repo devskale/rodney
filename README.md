@@ -34,7 +34,7 @@ go build -o rodney .
 
 Requires:
 - Go 1.21+
-- Google Chrome or Chromium installed (or set `JODNEY_CHROME_BIN=/path/to/chrome`)
+- Google Chrome or Chromium installed (or set `RODNEY_CHROME_BIN=/path/to/chrome`)
 
 ## Usage
 
@@ -173,21 +173,21 @@ print(f'PASS: all {len(buttons)} buttons have accessible names')
 
 ### Network interception
 
-Jodney can intercept network requests to mock API responses or block requests entirely. Because a request has to be answered while the interception router is alive, these commands run as **persistent foreground processes** — start them in one shell, drive the browser from another, and stop with Ctrl+C.
+Rodney can intercept network requests to mock API responses or block requests entirely. Because a request has to be answered while the interception router is alive, these commands run as **persistent foreground processes** — start them in one shell, drive the browser from another, and stop with Ctrl+C.
 
 ```bash
 # Serve a canned response for any request matching a URL pattern
-jodney mock "*api.example.com/users*" '{"id": 1, "name": "Mock"}' --type application/json
+rodney mock "*api.example.com/users*" '{"id": 1, "name": "Mock"}' --type application/json
 
 # Custom status code and request-method filter
-jodney mock "*api.example.com/login*" '{"error": "offline"}' --status 503 --method POST
+rodney mock "*api.example.com/login*" '{"error": "offline"}' --status 503 --method POST
 
 # Read the response body from a file
-jodney mock "*example.com/config*" -file=config.json --type application/json
+rodney mock "*example.com/config*" -file=config.json --type application/json
 
 # Fail matching requests client-side (e.g. to test offline behaviour)
-jodney block "*.jpg" "*.gif"
-jodney block "*api.example.com*" --method POST
+rodney block "*.jpg" "*.gif"
+rodney block "*api.example.com*" --method POST
 ```
 
 The `pattern` is a glob-style URL pattern (e.g. `*api.example.com/users*`). `--method` restricts interception to a specific HTTP method; without it, all methods match. `mock` defaults to status `200` and `text/plain`; override with `--status` and `--type`.

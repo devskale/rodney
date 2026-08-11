@@ -122,11 +122,11 @@ func statePath() string {
 }
 
 // chromeBin returns the Chrome/Chromium binary path to use.
-// Prefers JODNEY_CHROME_BIN, falling back to ROD_CHROME_BIN (the go-rod
+// Prefers RODNEY_CHROME_BIN, falling back to ROD_CHROME_BIN (the go-rod
 // library convention) for compatibility. Returns "" if neither is set,
 // meaning go-rod's default discovery is used.
 func chromeBin() string {
-	if bin := os.Getenv("JODNEY_CHROME_BIN"); bin != "" {
+	if bin := os.Getenv("RODNEY_CHROME_BIN"); bin != "" {
 		return bin
 	}
 	return os.Getenv("ROD_CHROME_BIN")
@@ -189,64 +189,64 @@ func printUsage() {
 }
 
 // commandUsage maps each command to its one-line usage string, used for
-// per-command `jodney <cmd> --help` output.
+// per-command `rodney <cmd> --help` output.
 var commandUsage = map[string]string{
-	"start":         "jodney start [--show] [--insecure|-k] [--local]",
-	"connect":       "jodney connect <host:port>",
-	"stop":          "jodney stop",
-	"status":        "jodney status",
-	"open":          "jodney open <url>",
-	"back":          "jodney back",
-	"forward":       "jodney forward",
-	"reload":        "jodney reload [--hard]",
-	"clear-cache":   "jodney clear-cache",
-	"url":           "jodney url",
-	"title":         "jodney title",
-	"html":          "jodney html [selector]",
-	"text":          "jodney text <selector>",
-	"attr":          "jodney attr <selector> <attribute>",
-	"pdf":           "jodney pdf [file]",
-	"js":            "jodney js <expression>",
-	"click":         "jodney click <selector>",
-	"input":         "jodney input <selector> <text>",
-	"clear":         "jodney clear <selector>",
-	"select":        "jodney select <selector> <value>",
-	"submit":        "jodney submit <selector>",
-	"hover":         "jodney hover <selector>",
-	"file":          "jodney file <selector> <path|->",
-	"download":      "jodney download <selector> [file|-]",
-	"focus":         "jodney focus <selector>",
-	"wait":          "jodney wait <selector>",
-	"waitload":      "jodney waitload",
-	"waitstable":    "jodney waitstable",
-	"waitidle":      "jodney waitidle",
-	"sleep":         "jodney sleep <seconds>",
-	"screenshot":    "jodney screenshot [-w N] [-h N] [file]",
-	"screenshot-el": "jodney screenshot-el <selector> [file]",
-	"start-video":   "jodney start-video",
-	"stop-video":    "jodney stop-video [file]",
-	"pages":         "jodney pages",
-	"page":          "jodney page <index>",
-	"newpage":       "jodney newpage [url]",
-	"closepage":     "jodney closepage [index]",
-	"exists":        "jodney exists <selector>",
-	"count":         "jodney count <selector>",
-	"visible":       "jodney visible <selector>",
-	"assert":        "jodney assert <js-expression> [expected] [--message msg]",
-	"ua":            "jodney ua <user-agent-string>",
-	"timezone":      "jodney timezone <timezone-id>",
-	"locale":        "jodney locale <locale>",
-	"geo":           "jodney geo --lat <lat> --lon <lon>",
-	"media":         "jodney media [--type T] [--feature name=value ...]",
-	"ax-tree":       "jodney ax-tree [--depth N] [--json]",
-	"ax-find":       "jodney ax-find [--name N] [--role R] [--json]",
-	"ax-node":       "jodney ax-node <selector> [--json]",
-	"cookie-set":    "jodney cookie-set <name> <value> [opts]",
-	"cookie-get":    "jodney cookie-get [name] [--json]",
-	"cookie-delete": "jodney cookie-delete <name> [opts]",
-	"cookie-clear":  "jodney cookie-clear [--domain <domain>]",
-	"mock":          "jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
-	"block":         "jodney block <pattern> [--method M]",
+	"start":         "rodney start [--show] [--insecure|-k] [--local]",
+	"connect":       "rodney connect <host:port>",
+	"stop":          "rodney stop",
+	"status":        "rodney status",
+	"open":          "rodney open <url>",
+	"back":          "rodney back",
+	"forward":       "rodney forward",
+	"reload":        "rodney reload [--hard]",
+	"clear-cache":   "rodney clear-cache",
+	"url":           "rodney url",
+	"title":         "rodney title",
+	"html":          "rodney html [selector]",
+	"text":          "rodney text <selector>",
+	"attr":          "rodney attr <selector> <attribute>",
+	"pdf":           "rodney pdf [file]",
+	"js":            "rodney js <expression>",
+	"click":         "rodney click <selector>",
+	"input":         "rodney input <selector> <text>",
+	"clear":         "rodney clear <selector>",
+	"select":        "rodney select <selector> <value>",
+	"submit":        "rodney submit <selector>",
+	"hover":         "rodney hover <selector>",
+	"file":          "rodney file <selector> <path|->",
+	"download":      "rodney download <selector> [file|-]",
+	"focus":         "rodney focus <selector>",
+	"wait":          "rodney wait <selector>",
+	"waitload":      "rodney waitload",
+	"waitstable":    "rodney waitstable",
+	"waitidle":      "rodney waitidle",
+	"sleep":         "rodney sleep <seconds>",
+	"screenshot":    "rodney screenshot [-w N] [-h N] [file]",
+	"screenshot-el": "rodney screenshot-el <selector> [file]",
+	"start-video":   "rodney start-video",
+	"stop-video":    "rodney stop-video [file]",
+	"pages":         "rodney pages",
+	"page":          "rodney page <index>",
+	"newpage":       "rodney newpage [url]",
+	"closepage":     "rodney closepage [index]",
+	"exists":        "rodney exists <selector>",
+	"count":         "rodney count <selector>",
+	"visible":       "rodney visible <selector>",
+	"assert":        "rodney assert <js-expression> [expected] [--message msg]",
+	"ua":            "rodney ua <user-agent-string>",
+	"timezone":      "rodney timezone <timezone-id>",
+	"locale":        "rodney locale <locale>",
+	"geo":           "rodney geo --lat <lat> --lon <lon>",
+	"media":         "rodney media [--type T] [--feature name=value ...]",
+	"ax-tree":       "rodney ax-tree [--depth N] [--json]",
+	"ax-find":       "rodney ax-find [--name N] [--role R] [--json]",
+	"ax-node":       "rodney ax-node <selector> [--json]",
+	"cookie-set":    "rodney cookie-set <name> <value> [opts]",
+	"cookie-get":    "rodney cookie-get [name] [--json]",
+	"cookie-delete": "rodney cookie-delete <name> [opts]",
+	"cookie-clear":  "rodney cookie-clear [--domain <domain>]",
+	"mock":          "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
+	"block":         "rodney block <pattern> [--method M]",
 }
 
 // containsHelpFlag reports whether args contains a --help request.
@@ -318,7 +318,7 @@ func main() {
 	// Per-command help: if the command is known and --help is present among
 	// its args (or the command itself is a help request), print that command's
 	// usage line instead of dispatching. This gives a uniform, friendly
-	// `jodney <cmd> --help` for every command, including flag-based ones that
+	// `rodney <cmd> --help` for every command, including flag-based ones that
 	// would otherwise choke on the flag parser. `-h` is intentionally NOT
 	// treated as help here because some commands (e.g. screenshot) use it as a
 	// flag alias.
@@ -458,11 +458,11 @@ func main() {
 var defaultTimeout = 30 * time.Second
 
 // timeoutSeconds returns the element-query default timeout in seconds.
-// Prefers JODNEY_TIMEOUT, falling back to ROD_TIMEOUT (the go-rod library
+// Prefers RODNEY_TIMEOUT, falling back to ROD_TIMEOUT (the go-rod library
 // convention) for compatibility. Returns 0 if neither is set, meaning the
 // package-level defaultTimeout is kept.
 func timeoutSeconds() float64 {
-	t := os.Getenv("JODNEY_TIMEOUT")
+	t := os.Getenv("RODNEY_TIMEOUT")
 	if t == "" {
 		t = os.Getenv("ROD_TIMEOUT")
 	}
@@ -536,17 +536,17 @@ func parseStartArgs(args []string) (ignoreCertErrors bool, headless bool, err er
 	return ignoreCertErrors, headless, nil
 }
 
-// cmdUpdate rebuilds the jodney binary from upstream source. It clones the
+// cmdUpdate rebuilds the rodney binary from upstream source. It clones the
 // repo into a standard location if needed, pulls the latest, builds into the
 // directory that currently holds the running binary, and exits.
 //
-// The binary is built from source (jodney is not published to PyPI), so this
+// The binary is built from source (rodney is not published to PyPI), so this
 // is the supported way to self-update. It requires git and Go on PATH.
 func cmdUpdate(args []string) {
 	// Resolve the path of the currently running binary.
 	exe, err := os.Executable()
 	if err != nil {
-		fatal("cannot locate jodney binary: %v", err)
+		fatal("cannot locate rodney binary: %v", err)
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
 
@@ -554,10 +554,10 @@ func cmdUpdate(args []string) {
 	// child), or in a few well-known locations. Prefer a sibling repo dir.
 	repo := ""
 	candidates := []string{
-		filepath.Join(filepath.Dir(exe), "..", "jodney"), // ~/.local/bin/../jodney
-		filepath.Join(filepath.Dir(exe), "jodney"),       // same dir as binary
-		filepath.Join(os.Getenv("HOME"), "src", "jodney"),
-		filepath.Join(os.Getenv("HOME"), "code", "clones", "jodney"),
+		filepath.Join(filepath.Dir(exe), "..", "rodney"), // ~/.local/bin/../rodney
+		filepath.Join(filepath.Dir(exe), "rodney"),       // same dir as binary
+		filepath.Join(os.Getenv("HOME"), "src", "rodney"),
+		filepath.Join(os.Getenv("HOME"), "code", "clones", "rodney"),
 	}
 	for _, c := range candidates {
 		if fi, err := os.Stat(filepath.Join(c, "go.mod")); err == nil && !fi.IsDir() {
@@ -567,13 +567,13 @@ func cmdUpdate(args []string) {
 	}
 
 	if repo == "" {
-		// No existing checkout — clone into ~/src/jodney (the documented location).
-		repo = filepath.Join(os.Getenv("HOME"), "src", "jodney")
+		// No existing checkout — clone into ~/src/rodney (the documented location).
+		repo = filepath.Join(os.Getenv("HOME"), "src", "rodney")
 		if err := os.MkdirAll(filepath.Dir(repo), 0755); err != nil {
 			fatal("failed to create src dir: %v", err)
 		}
-		fmt.Printf("Cloning jodney into %s...\n", repo)
-		out, err := exec.Command("git", "clone", "git@github.com:devskale/jodney.git", repo).CombinedOutput()
+		fmt.Printf("Cloning rodney into %s...\n", repo)
+		out, err := exec.Command("git", "clone", "git@github.com:devskale/rodney.git", repo).CombinedOutput()
 		if err != nil {
 			fatal("git clone failed: %v\n%s", err, out)
 		}
@@ -586,7 +586,7 @@ func cmdUpdate(args []string) {
 	}
 
 	// Build into the same directory as the current binary so PATH stays valid.
-	dest := filepath.Join(filepath.Dir(exe), "jodney")
+	dest := filepath.Join(filepath.Dir(exe), "rodney")
 	fmt.Printf("Building %s...\n", dest)
 	buildCmd := exec.Command("go", "build", "-o", dest, ".")
 	buildCmd.Dir = repo
@@ -1233,12 +1233,12 @@ func inferDownloadFilename(urlStr string) string {
 // cmdMock intercepts requests matching a URL pattern and serves a canned
 // response instead of hitting the real server. It runs as a persistent
 // foreground command: the interception router stays alive until the process
-// is interrupted (Ctrl+C / SIGTERM), so other jodney commands in separate
+// is interrupted (Ctrl+C / SIGTERM), so other rodney commands in separate
 // shells can drive the browser while the mock is active.
 //
 // Usage:
 //
-//	jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]
+//	rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]
 //
 // pattern is a glob-style URL pattern (e.g. "*api.example.com/users*"),
 // response is the body text to serve (or "-file=<path>" to read a file),
@@ -1256,7 +1256,7 @@ func cmdMock(args []string) {
 	}
 	rest := fs.Args()
 	if len(rest) < 2 {
-		fatal("usage: jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]")
+		fatal("usage: rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]")
 	}
 	pattern := rest[0]
 	body := rest[1]
@@ -1300,7 +1300,7 @@ func cmdMock(args []string) {
 //
 // Usage:
 //
-//	jodney block <pattern> [--method M]
+//	rodney block <pattern> [--method M]
 func cmdBlock(args []string) {
 	fs := flag.NewFlagSet("block", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1311,7 +1311,7 @@ func cmdBlock(args []string) {
 	}
 	rest := fs.Args()
 	if len(rest) < 1 {
-		fatal("usage: jodney block <pattern> [--method M]")
+		fatal("usage: rodney block <pattern> [--method M]")
 	}
 	pattern := rest[0]
 

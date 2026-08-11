@@ -75,10 +75,10 @@ Emulation:
                                     Emulate media type or features
 
 Network interception:
-  jodney mock <pattern> <response> [--status N] [--type MIME] [--method M]
+  rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]
                                     Serve a canned response for matching
                                     requests (persistent until Ctrl+C)
-  jodney block <pattern> [--method M]
+  rodney block <pattern> [--method M]
                                     Fail matching requests client-side
                                     (persistent until Ctrl+C)
 
