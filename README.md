@@ -1,27 +1,27 @@
-# Jodney: Chrome automation from the command line
+# Rodney: Chrome automation from the command line
 
-[![PyPI](https://img.shields.io/pypi/v/jodney.svg)](https://pypi.org/project/jodney/)
-[![Changelog](https://img.shields.io/github/v/release/devskale/jodney?include_prereleases&label=changelog)](https://github.com/devskale/jodney/releases)
-[![Tests](https://github.com/devskale/jodney/actions/workflows/test.yml/badge.svg)](https://github.com/devskale/jodney/actions/workflows/test.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/devskale/jodney/blob/main/LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/rodney.svg)](https://pypi.org/project/rodney/)
+[![Changelog](https://img.shields.io/github/v/release/simonw/rodney?include_prereleases&label=changelog)](https://github.com/simonw/rodney/releases)
+[![Tests](https://github.com/simonw/rodney/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/rodney/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/rodney/blob/main/LICENSE)
 
 A Go CLI tool that drives a persistent headless Chrome instance using the [rod](https://github.com/go-rod/rod) browser automation library. Each command connects to the same long-running Chrome process, making it easy to script multi-step browser interactions from shell scripts or interactive use.
 
 ## Architecture
 
 ```
-jodney start          →  launches Chrome (headless, persists after CLI exits)
-                          saves WebSocket debug URL to ~/.jodney/state.json
+rodney start          →  launches Chrome (headless, persists after CLI exits)
+                          saves WebSocket debug URL to ~/.rodney/state.json
 
-jodney connect H:P    →  connects to an existing Chrome on a remote debug port
-                          saves WebSocket debug URL to ~/.jodney/state.json
+rodney connect H:P    →  connects to an existing Chrome on a remote debug port
+                          saves WebSocket debug URL to ~/.rodney/state.json
 
-jodney open URL       →  connects to running Chrome via WebSocket
+rodney open URL       →  connects to running Chrome via WebSocket
                           navigates the active tab, disconnects
 
-jodney js EXPR        →  connects, evaluates JS, prints result, disconnects
+rodney js EXPR        →  connects, evaluates JS, prints result, disconnects
 
-jodney stop           →  connects and shuts down Chrome, cleans up state
+rodney stop           →  connects and shuts down Chrome, cleans up state
 ```
 
 Each CLI invocation is a short-lived process. Chrome runs independently and tabs persist between commands.
@@ -29,7 +29,7 @@ Each CLI invocation is a short-lived process. Chrome runs independently and tabs
 ## Building
 
 ```bash
-go build -o jodney .
+go build -o rodney .
 ```
 
 Requires:
@@ -41,46 +41,46 @@ Requires:
 ### Start/stop the browser
 
 ```bash
-jodney start              # Launch headless Chrome
-jodney start --show       # Launch with visible browser window
-jodney start --insecure   # Launch with TLS errors ignored (-k shorthand)
-jodney connect host:9222  # Connect to existing Chrome on remote debug port
-jodney status             # Show browser info and active page
-jodney stop               # Shut down Chrome
+rodney start              # Launch headless Chrome
+rodney start --show       # Launch with visible browser window
+rodney start --insecure   # Launch with TLS errors ignored (-k shorthand)
+rodney connect host:9222  # Connect to existing Chrome on remote debug port
+rodney status             # Show browser info and active page
+rodney stop               # Shut down Chrome
 ```
 
 ### Navigate
 
 ```bash
-jodney open https://example.com    # Navigate to URL
-jodney open example.com            # http:// prefix added automatically
-jodney back                        # Go back
-jodney forward                     # Go forward
-jodney reload                      # Reload page
-jodney reload --hard               # Reload bypassing cache
-jodney clear-cache                 # Clear the browser cache
+rodney open https://example.com    # Navigate to URL
+rodney open example.com            # http:// prefix added automatically
+rodney back                        # Go back
+rodney forward                     # Go forward
+rodney reload                      # Reload page
+rodney reload --hard               # Reload bypassing cache
+rodney clear-cache                 # Clear the browser cache
 ```
 
 ### Extract information
 
 ```bash
-jodney url                    # Print current URL
-jodney title                  # Print page title
-jodney text "h1"              # Print text content of element
-jodney html "div.content"     # Print outer HTML of element
-jodney html                   # Print full page HTML
-jodney attr "a#link" href     # Print attribute value
-jodney pdf output.pdf         # Save page as PDF
+rodney url                    # Print current URL
+rodney title                  # Print page title
+rodney text "h1"              # Print text content of element
+rodney html "div.content"     # Print outer HTML of element
+rodney html                   # Print full page HTML
+rodney attr "a#link" href     # Print attribute value
+rodney pdf output.pdf         # Save page as PDF
 ```
 
 ### Run JavaScript
 
 ```bash
-jodney js document.title                        # Evaluate expression
-jodney js "1 + 2"                               # Math
-jodney js 'document.querySelector("h1").textContent'  # DOM queries
-jodney js '[1,2,3].map(x => x * 2)'            # Returns pretty-printed JSON
-jodney js 'document.querySelectorAll("a").length'     # Count elements
+rodney js document.title                        # Evaluate expression
+rodney js "1 + 2"                               # Math
+rodney js 'document.querySelector("h1").textContent'  # DOM queries
+rodney js '[1,2,3].map(x => x * 2)'            # Returns pretty-printed JSON
+rodney js 'document.querySelectorAll("a").length'     # Count elements
 ```
 
 The expression is automatically wrapped in `() => { return (expr); }`.
@@ -88,79 +88,79 @@ The expression is automatically wrapped in `() => { return (expr); }`.
 ### Interact with elements
 
 ```bash
-jodney click "button#submit"       # Click element
-jodney input "#search" "query"     # Type into input field
-jodney clear "#search"             # Clear input field
-jodney file "#upload" photo.png    # Set file on a file input
-jodney file "#upload" -            # Set file from stdin
-jodney download "a.pdf-link"       # Download href/src target to file
-jodney download "a.pdf-link" -     # Download to stdout
-jodney select "#dropdown" "value"  # Select dropdown by value
-jodney submit "form#login"         # Submit a form
-jodney hover ".menu-item"          # Hover over element
-jodney focus "#email"              # Focus element
+rodney click "button#submit"       # Click element
+rodney input "#search" "query"     # Type into input field
+rodney clear "#search"             # Clear input field
+rodney file "#upload" photo.png    # Set file on a file input
+rodney file "#upload" -            # Set file from stdin
+rodney download "a.pdf-link"       # Download href/src target to file
+rodney download "a.pdf-link" -     # Download to stdout
+rodney select "#dropdown" "value"  # Select dropdown by value
+rodney submit "form#login"         # Submit a form
+rodney hover ".menu-item"          # Hover over element
+rodney focus "#email"              # Focus element
 ```
 
 ### Wait for conditions
 
 ```bash
-jodney wait ".loaded"       # Wait for element to appear and be visible
-jodney waitload             # Wait for page load event
-jodney waitstable           # Wait for DOM to stop changing
-jodney waitidle             # Wait for network to be idle
-jodney sleep 2.5            # Sleep for N seconds
+rodney wait ".loaded"       # Wait for element to appear and be visible
+rodney waitload             # Wait for page load event
+rodney waitstable           # Wait for DOM to stop changing
+rodney waitidle             # Wait for network to be idle
+rodney sleep 2.5            # Sleep for N seconds
 ```
 
 ### Screenshots
 
 ```bash
-jodney screenshot                         # Save as screenshot.png
-jodney screenshot page.png                # Save to specific file
-jodney screenshot -w 1280 -h 720 out.png  # Set viewport width/height
-jodney screenshot-el ".chart" chart.png   # Screenshot specific element
+rodney screenshot                         # Save as screenshot.png
+rodney screenshot page.png                # Save to specific file
+rodney screenshot -w 1280 -h 720 out.png  # Set viewport width/height
+rodney screenshot-el ".chart" chart.png   # Screenshot specific element
 ```
 
 ### Manage tabs
 
 ```bash
-jodney pages                    # List all tabs (* marks active)
-jodney newpage https://...      # Open URL in new tab
-jodney page 1                   # Switch to tab by index
-jodney closepage 1              # Close tab by index
-jodney closepage                # Close active tab
+rodney pages                    # List all tabs (* marks active)
+rodney newpage https://...      # Open URL in new tab
+rodney page 1                   # Switch to tab by index
+rodney closepage 1              # Close tab by index
+rodney closepage                # Close active tab
 ```
 
 ### Query elements
 
 ```bash
-jodney exists ".loading"    # Exit 0 if exists, exit 1 if not
-jodney count "li.item"      # Print number of matching elements
-jodney visible "#modal"     # Exit 0 if visible, exit 1 if not
-jodney assert 'document.title' 'Home'  # Exit 0 if equal, exit 1 if not
-jodney assert 'document.querySelector("h1") !== null'  # Exit 0 if truthy
+rodney exists ".loading"    # Exit 0 if exists, exit 1 if not
+rodney count "li.item"      # Print number of matching elements
+rodney visible "#modal"     # Exit 0 if visible, exit 1 if not
+rodney assert 'document.title' 'Home'  # Exit 0 if equal, exit 1 if not
+rodney assert 'document.querySelector("h1") !== null'  # Exit 0 if truthy
 ```
 
 ### Accessibility testing
 
 ```bash
-jodney ax-tree                           # Dump full accessibility tree
-jodney ax-tree --depth 3                 # Limit tree depth
-jodney ax-tree --json                    # Output as JSON
+rodney ax-tree                           # Dump full accessibility tree
+rodney ax-tree --depth 3                 # Limit tree depth
+rodney ax-tree --json                    # Output as JSON
 
-jodney ax-find --role button             # Find all buttons
-jodney ax-find --name "Submit"           # Find by accessible name
-jodney ax-find --role link --name "Home" # Combine filters
-jodney ax-find --role button --json      # Output as JSON
+rodney ax-find --role button             # Find all buttons
+rodney ax-find --name "Submit"           # Find by accessible name
+rodney ax-find --role link --name "Home" # Combine filters
+rodney ax-find --role button --json      # Output as JSON
 
-jodney ax-node "#submit-btn"             # Inspect element's a11y properties
-jodney ax-node "h1" --json               # Output as JSON
+rodney ax-node "#submit-btn"             # Inspect element's a11y properties
+rodney ax-node "h1" --json               # Output as JSON
 ```
 
 These commands use Chrome's [Accessibility CDP domain](https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/) to expose what assistive technologies see. `ax-tree` uses `getFullAXTree`, `ax-find` uses `queryAXTree`, and `ax-node` uses `getPartialAXTree`.
 
 ```bash
 # CI check: verify all buttons have accessible names
-jodney ax-find --role button --json | python3 -c "
+rodney ax-find --role button --json | python3 -c "
 import json, sys
 buttons = json.load(sys.stdin)
 unnamed = [b for b in buttons if not b.get('name', {}).get('value')]
@@ -196,65 +196,65 @@ This builds on rod's [request hijacking](https://github.com/go-rod/rod) (`Fetch`
 
 ### Directory-scoped sessions
 
-By default, Jodney stores state globally in `~/.jodney/`. You can instead create a session scoped to the current directory with `--local`:
+By default, Rodney stores state globally in `~/.rodney/`. You can instead create a session scoped to the current directory with `--local`:
 
 ```bash
-jodney start --local          # State stored in ./.jodney/state.json
-                              # Chrome data in ./.jodney/chrome-data/
-jodney open https://example.com   # Auto-detects local session
-jodney stop                       # Cleans up local session
+rodney start --local          # State stored in ./.rodney/state.json
+                              # Chrome data in ./.rodney/chrome-data/
+rodney open https://example.com   # Auto-detects local session
+rodney stop                       # Cleans up local session
 ```
 
 This is useful when you want isolated browser sessions per project — each directory gets its own Chrome instance, cookies, and state.
 
-**Auto-detection:** When neither `--local` nor `--global` is specified, Jodney checks for `./.jodney/state.json` in the current directory. If found, it uses the local session; otherwise it falls back to the global `~/.jodney/` session.
+**Auto-detection:** When neither `--local` nor `--global` is specified, Rodney checks for `./.rodney/state.json` in the current directory. If found, it uses the local session; otherwise it falls back to the global `~/.rodney/` session.
 
 ```bash
 # Force global even when a local session exists
-jodney --global open https://example.com
+rodney --global open https://example.com
 
 # Force local (errors if no local session)
-jodney --local status
+rodney --local status
 ```
 
 The `--local` and `--global` flags can appear anywhere in the command:
 
 ```bash
-jodney --local start
-jodney start --local          # Same effect
-jodney open --global https://example.com
+rodney --local start
+rodney start --local          # Same effect
+rodney open --global https://example.com
 ```
 
-Add `.jodney/` to your `.gitignore` to keep session state out of version control.
+Add `.rodney/` to your `.gitignore` to keep session state out of version control.
 
 ### Shell scripting examples
 
 ```bash
 # Wait for page to load and extract data
-jodney start
-jodney open https://example.com
-jodney waitstable
-title=$(jodney title)
+rodney start
+rodney open https://example.com
+rodney waitstable
+title=$(rodney title)
 echo "Page: $title"
 
 # Conditional logic based on element presence
-if jodney exists ".error-message"; then
-    jodney text ".error-message"
+if rodney exists ".error-message"; then
+    rodney text ".error-message"
 fi
 
 # Loop through pages
 for url in page1 page2 page3; do
-    jodney open "https://example.com/$url"
-    jodney waitstable
-    jodney screenshot "${url}.png"
+    rodney open "https://example.com/$url"
+    rodney waitstable
+    rodney screenshot "${url}.png"
 done
 
-jodney stop
+rodney stop
 ```
 
 ## Exit codes
 
-Jodney uses distinct exit codes to separate check failures from errors:
+Rodney uses distinct exit codes to separate check failures from errors:
 
 | Exit code | Meaning |
 |---|---|
@@ -264,37 +264,37 @@ Jodney uses distinct exit codes to separate check failures from errors:
 
 This makes it easy to distinguish between "the assertion is false" and "the command couldn't run" in scripts and CI pipelines.
 
-## Using Jodney for checks
+## Using Rodney for checks
 
 Several commands return **exit code 1** when a condition is not met, making them useful as assertions in shell scripts and CI pipelines. All of these print their result to stdout and exit cleanly — no error message is written to stderr.
 
 ### `exists` — check if an element exists in the DOM
 
 ```bash
-jodney exists "h1"
+rodney exists "h1"
 # Prints "true", exits 0
 
-jodney exists ".nonexistent"
+rodney exists ".nonexistent"
 # Prints "false", exits 1
 ```
 
 ### `visible` — check if an element is visible
 
 ```bash
-jodney visible "#modal"
+rodney visible "#modal"
 # Prints "true" and exits 0 if the element exists and is visible
 
-jodney visible "#hidden-div"
+rodney visible "#hidden-div"
 # Prints "false" and exits 1 if the element is hidden or doesn't exist
 ```
 
 ### `ax-find` — check for accessibility nodes
 
 ```bash
-jodney ax-find --role button --name "Submit"
+rodney ax-find --role button --name "Submit"
 # Prints the matching node(s), exits 0
 
-jodney ax-find --role banner --name "Nonexistent"
+rodney ax-find --role banner --name "Nonexistent"
 # Prints "No matching nodes" to stderr, exits 1
 ```
 
@@ -304,32 +304,32 @@ With one argument, checks that the expression is truthy. With two arguments, che
 
 ```bash
 # Truthy mode — check that expression evaluates to a truthy value
-jodney assert 'document.querySelector(".logged-in") !== null'
+rodney assert 'document.querySelector(".logged-in") !== null'
 # Prints "pass", exits 0
 
-jodney assert 'document.querySelector(".nonexistent")'
+rodney assert 'document.querySelector(".nonexistent")'
 # Prints "fail: got null", exits 1
 
 # Equality mode — check that expression result matches expected value
-jodney assert 'document.title' 'Dashboard'
+rodney assert 'document.title' 'Dashboard'
 # Prints "pass" if title is "Dashboard", exits 0
 
-jodney assert 'document.querySelectorAll(".item").length' '3'
+rodney assert 'document.querySelectorAll(".item").length' '3'
 # Prints "pass" if there are exactly 3 items, exits 0
 
-jodney assert 'document.title' 'Wrong Title'
+rodney assert 'document.title' 'Wrong Title'
 # Prints 'fail: got "Dashboard", expected "Wrong Title"', exits 1
 ```
 
-The expression is evaluated the same way as `jodney js` — the result is converted to its string representation before comparison. This means `jodney assert 'document.title' 'Dashboard'` compares the unquoted string, and `jodney assert '1 + 2' '3'` compares the number as a string.
+The expression is evaluated the same way as `rodney js` — the result is converted to its string representation before comparison. This means `rodney assert 'document.title' 'Dashboard'` compares the unquoted string, and `rodney assert '1 + 2' '3'` compares the number as a string.
 
 Use `--message` (or `-m`) to add a human-readable description to the failure output:
 
 ```bash
-jodney assert 'document.querySelector(".logged-in")' -m "User should be logged in"
+rodney assert 'document.querySelector(".logged-in")' -m "User should be logged in"
 # On failure: "fail: User should be logged in (got null)"
 
-jodney assert 'document.title' 'Dashboard' --message "Wrong page loaded"
+rodney assert 'document.title' 'Dashboard' --message "Wrong page loaded"
 # On failure: 'fail: Wrong page loaded (got "Home", expected "Dashboard")'
 ```
 
@@ -350,29 +350,29 @@ check() {
     fi
 }
 
-jodney start
-jodney open "https://example.com"
-jodney waitstable
+rodney start
+rodney open "https://example.com"
+rodney waitstable
 
 # Assert elements exist
-check jodney exists "h1"
-check jodney exists "nav"
-check jodney exists "footer"
+check rodney exists "h1"
+check rodney exists "nav"
+check rodney exists "footer"
 
 # Assert key elements are visible
-check jodney visible "h1"
-check jodney visible "#main-content"
+check rodney visible "h1"
+check rodney visible "#main-content"
 
 # Assert JS expressions
-check jodney assert 'document.title' 'Example Domain'
-check jodney assert 'document.querySelectorAll("p").length' '2'
-check jodney assert 'document.querySelector("h1") !== null'
+check rodney assert 'document.title' 'Example Domain'
+check rodney assert 'document.querySelectorAll("p").length' '2'
+check rodney assert 'document.querySelector("h1") !== null'
 
 # Assert accessibility requirements
-check jodney ax-find --role navigation
-check jodney ax-find --role heading --name "Example Domain"
+check rodney ax-find --role navigation
+check rodney ax-find --role heading --name "Example Domain"
 
-jodney stop
+rodney stop
 
 if [ "$FAIL" -ne 0 ]; then
     echo "Some checks failed"
@@ -381,28 +381,28 @@ fi
 echo "All checks passed"
 ```
 
-This pattern is useful in CI — run Jodney as a post-deploy check, an accessibility audit, or a smoke test against a staging environment. Because exit code 2 signals an actual error (e.g. Chrome didn't start), `set -e` will abort the script immediately if something is broken rather than reporting a misleading test failure.
+This pattern is useful in CI — run Rodney as a post-deploy check, an accessibility audit, or a smoke test against a staging environment. Because exit code 2 signals an actual error (e.g. Chrome didn't start), `set -e` will abort the script immediately if something is broken rather than reporting a misleading test failure.
 
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `JODNEY_HOME` | `~/.jodney` | Data directory for state and Chrome profile |
-| `JODNEY_CHROME_BIN` | auto | Path to Chrome/Chromium binary (falls back to `ROD_CHROME_BIN`) |
-| `JODNEY_TIMEOUT` | `30` | Default timeout in seconds for element queries (falls back to `ROD_TIMEOUT`) |
+| `RODNEY_HOME` | `~/.rodney` | Data directory for state and Chrome profile |
+| `ROD_CHROME_BIN` | auto | Path to Chrome/Chromium binary (falls back to `ROD_CHROME_BIN`) |
+| `ROD_TIMEOUT` | `30` | Default timeout in seconds for element queries (falls back to `ROD_TIMEOUT`) |
 | `HTTPS_PROXY` / `HTTP_PROXY` | (none) | Authenticated proxy auto-detected on start |
 
-Global state is stored in `~/.jodney/state.json` with Chrome user data in `~/.jodney/chrome-data/`. When using `--local`, state is stored in `./.jodney/state.json` and `./.jodney/chrome-data/` in the current directory instead. Set `JODNEY_HOME` to override the default global directory.
+Global state is stored in `~/.rodney/state.json` with Chrome user data in `~/.rodney/chrome-data/`. When using `--local`, state is stored in `./.rodney/state.json` and `./.rodney/chrome-data/` in the current directory instead. Set `RODNEY_HOME` to override the default global directory.
 
 ## Proxy support
 
-In environments with authenticated HTTP proxies (e.g., `HTTPS_PROXY=http://user:pass@host:port`), `jodney start` automatically:
+In environments with authenticated HTTP proxies (e.g., `HTTPS_PROXY=http://user:pass@host:port`), `rodney start` automatically:
 
 1. Detects the proxy credentials from environment variables
 2. Launches a local forwarding proxy that injects `Proxy-Authorization` headers into CONNECT requests
 3. Configures Chrome to use the local proxy
 
-This is necessary because Chrome cannot natively authenticate to proxies during HTTPS tunnel (CONNECT) establishment. The local proxy runs as a background process and is automatically cleaned up by `jodney stop`.
+This is necessary because Chrome cannot natively authenticate to proxies during HTTPS tunnel (CONNECT) establishment. The local proxy runs as a background process and is automatically cleaned up by `rodney stop`.
 
 See [claude-code-chrome-proxy.md](claude-code-chrome-proxy.md) for detailed technical notes.
 
@@ -476,8 +476,8 @@ The tool uses the [rod](https://github.com/go-rod/rod) Go library which communic
 
 | Flag | Description |
 |---|---|
-| `--local` | Use directory-scoped session (`./.jodney/`) |
-| `--global` | Use global session (`~/.jodney/`) |
+| `--local` | Use directory-scoped session (`./.rodney/`) |
+| `--global` | Use global session (`~/.rodney/`) |
 | `--version` | Print version and exit |
 | `--update` | Rebuild the binary from upstream source (git clone/pull + `go build`) |
 | `--help`, `-h`, `help` | Show help message |

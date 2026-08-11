@@ -480,7 +480,7 @@ func TestFile_SetFileOnInput(t *testing.T) {
 	page := navigateTo(t, "/upload")
 
 	// Create a temp file to upload
-	tmp, err := os.CreateTemp("", "jodney-test-*.txt")
+	tmp, err := os.CreateTemp("", "rodney-test-*.txt")
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
@@ -511,12 +511,12 @@ func TestFile_SetFileOnInput(t *testing.T) {
 func TestFile_MultipleFiles(t *testing.T) {
 	page := navigateTo(t, "/upload")
 
-	tmp1, _ := os.CreateTemp("", "jodney-test1-*.txt")
+	tmp1, _ := os.CreateTemp("", "rodney-test1-*.txt")
 	defer os.Remove(tmp1.Name())
 	tmp1.Write([]byte("file 1"))
 	tmp1.Close()
 
-	tmp2, _ := os.CreateTemp("", "jodney-test2-*.txt")
+	tmp2, _ := os.CreateTemp("", "rodney-test2-*.txt")
 	defer os.Remove(tmp2.Name())
 	tmp2.Write([]byte("file 2"))
 	tmp2.Close()
@@ -700,7 +700,7 @@ func TestExtractScopeArgs_LastFlagWins(t *testing.T) {
 func TestResolveStateDir_Global(t *testing.T) {
 	dir := resolveStateDir(scopeGlobal, "/some/working/dir")
 	home, _ := os.UserHomeDir()
-	expected := filepath.Join(home, ".jodney")
+	expected := filepath.Join(home, ".rodney")
 	if dir != expected {
 		t.Errorf("expected %q, got %q", expected, dir)
 	}
@@ -708,31 +708,31 @@ func TestResolveStateDir_Global(t *testing.T) {
 
 func TestResolveStateDir_Local(t *testing.T) {
 	dir := resolveStateDir(scopeLocal, "/some/working/dir")
-	expected := filepath.Join("/some/working/dir", ".jodney")
+	expected := filepath.Join("/some/working/dir", ".rodney")
 	if dir != expected {
 		t.Errorf("expected %q, got %q", expected, dir)
 	}
 }
 
 func TestResolveStateDir_AutoPrefersLocal(t *testing.T) {
-	// Create a temp directory with a .jodney/state.json to simulate local session
+	// Create a temp directory with a .rodney/state.json to simulate local session
 	tmpDir := t.TempDir()
-	localJodney := filepath.Join(tmpDir, ".jodney")
-	os.MkdirAll(localJodney, 0755)
-	os.WriteFile(filepath.Join(localJodney, "state.json"), []byte(`{}`), 0644)
+	localRodney := filepath.Join(tmpDir, ".rodney")
+	os.MkdirAll(localRodney, 0755)
+	os.WriteFile(filepath.Join(localRodney, "state.json"), []byte(`{}`), 0644)
 
 	dir := resolveStateDir(scopeAuto, tmpDir)
-	if dir != localJodney {
-		t.Errorf("auto mode should prefer local when .jodney/state.json exists: expected %q, got %q", localJodney, dir)
+	if dir != localRodney {
+		t.Errorf("auto mode should prefer local when .rodney/state.json exists: expected %q, got %q", localRodney, dir)
 	}
 }
 
 func TestResolveStateDir_AutoFallsBackToGlobal(t *testing.T) {
-	// Use a temp directory with NO .jodney/ — should fall back to global
+	// Use a temp directory with NO .rodney/ — should fall back to global
 	tmpDir := t.TempDir()
 	dir := resolveStateDir(scopeAuto, tmpDir)
 	home, _ := os.UserHomeDir()
-	expected := filepath.Join(home, ".jodney")
+	expected := filepath.Join(home, ".rodney")
 	if dir != expected {
 		t.Errorf("auto mode should fall back to global: expected %q, got %q", expected, dir)
 	}
@@ -741,20 +741,20 @@ func TestResolveStateDir_AutoFallsBackToGlobal(t *testing.T) {
 func TestResolveStateDir_LocalUsesWorkingDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	dir := resolveStateDir(scopeLocal, tmpDir)
-	expected := filepath.Join(tmpDir, ".jodney")
+	expected := filepath.Join(tmpDir, ".rodney")
 	if dir != expected {
 		t.Errorf("local mode should use working dir: expected %q, got %q", expected, dir)
 	}
 }
 
 // =====================
-// JODNEY_HOME env var tests
+// RODNEY_HOME env var tests
 // =====================
 
 func TestStateDir_Default(t *testing.T) {
-	t.Setenv("JODNEY_HOME", "")
+	t.Setenv("RODNEY_HOME", "")
 	home, _ := os.UserHomeDir()
-	want := home + "/.jodney"
+	want := home + "/.rodney"
 	got := stateDir()
 	if got != want {
 		t.Errorf("stateDir() = %q, want %q", got, want)
@@ -763,7 +763,7 @@ func TestStateDir_Default(t *testing.T) {
 
 func TestStateDir_EnvVar(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("JODNEY_HOME", dir)
+	t.Setenv("RODNEY_HOME", dir)
 	got := stateDir()
 	if got != dir {
 		t.Errorf("stateDir() = %q, want %q", got, dir)
@@ -976,7 +976,7 @@ func TestAssert_EqualityPass_BoolString(t *testing.T) {
 }
 
 func TestAssert_ValueFormatting_MatchesJSCommand(t *testing.T) {
-	// Verify that the value formatting used by assert matches what jodney js outputs
+	// Verify that the value formatting used by assert matches what rodney js outputs
 	page := navigateTo(t, "/")
 
 	tests := []struct {

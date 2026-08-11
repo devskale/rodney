@@ -1,4 +1,4 @@
-module github.com/devskale/jodney
+module github.com/simonw/rodney
 
 go 1.24.7
 
