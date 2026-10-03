@@ -44,6 +44,8 @@ Interaction:
 
 Waiting:
   rodney wait <selector>          Wait for element to appear
+  rodney wait --url <substring>   Wait until the URL contains a substring
+  rodney waitnav                  Wait until the page navigates elsewhere
   rodney waitload                 Wait for page load
   rodney waitstable               Wait for DOM to stabilize
   rodney waitidle                 Wait for network idle
@@ -124,6 +126,15 @@ Network requests:
   rodney requests-start            Start background request collector
                                     (captures into requests.jsonl)
   rodney requests-stop             Stop collector and remove the buffer
+
+Viewport & device emulation:
+  rodney viewport <w> <h> [--clear]  Set viewport size (persisted in session)
+  rodney device <name> [--landscape] [--clear] [--list]
+                                    Emulate a device (viewport, DPR, touch,
+                                    user agent) — e.g. iphone-x, pixel-2, ipad
+  rodney headers [k=v ...] [--clear]
+                                    Extra HTTP headers for every request
+                                    (persisted in session; no args: list)
 
 Accessibility:
   rodney ax-tree [--depth N] [--json]       Dump accessibility tree

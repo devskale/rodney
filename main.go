@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/devices"
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
@@ -119,6 +120,11 @@ type State struct {
 	ConsoleLog     string `json:"console_log,omitempty"` // path to console.jsonl buffer
 	RequestPID     int    `json:"request_pid,omitempty"` // PID of background request collector
 	RequestLog     string `json:"request_log,omitempty"` // path to requests.jsonl buffer
+	Headers        map[string]string `json:"headers,omitempty"` // extra HTTP headers applied to every request
+	ViewportW      int    `json:"viewport_w,omitempty"`  // persisted viewport (0 = default)
+	ViewportH      int    `json:"viewport_h,omitempty"`
+	DeviceName     string `json:"device_name,omitempty"` // persisted device emulation preset
+	DeviceLandscape bool  `json:"device_landscape,omitempty"`
 }
 
 // stateDirOverride allows tests to redirect state to a temp dir
@@ -230,7 +236,7 @@ var commandUsage = map[string]string{
 	"file":           "rodney file <selector> <path|->",
 	"download":       "rodney download <selector> [file|-]",
 	"focus":          "rodney focus <selector>",
-	"wait":           "rodney wait <selector>",
+	"wait":           "rodney wait <selector> | rodney wait --url <substring>",
 	"waitload":       "rodney waitload",
 	"waitstable":     "rodney waitstable",
 	"waitidle":       "rodney waitidle",
@@ -272,6 +278,10 @@ var commandUsage = map[string]string{
 	"requests":       "rodney requests [--json] [--follow] [--clear]",
 	"requests-start": "rodney requests-start",
 	"requests-stop":  "rodney requests-stop",
+	"viewport":      "rodney viewport <width> <height> [--clear]",
+	"device":        "rodney device <name> [--landscape] [--clear] [--list]",
+	"waitnav":       "rodney waitnav",
+	"headers":       "rodney headers [k=v ...] [--clear]",
 }
 
 // cmdHelpEntry is the structured help for one command (Tier 1/2 of the help
@@ -364,7 +374,7 @@ var commandHelp = map[string]cmdHelpEntry{
 		Desc: "Scroll an element into view.", Examples: []string{"rodney scroll-el \"#footer\""}},
 
 	// --- Waiting ---
-	"wait": {Group: "Waiting", Usage: "rodney wait <selector>",
+	"wait": {Group: "Waiting", Usage: "rodney wait <selector> | rodney wait --url <substring>",
 		Desc: "Wait until an element appears (default timeout 30s, ROD_TIMEOUT to change).", Examples: []string{"rodney wait \".results\""}},
 	"waitload":   {Group: "Waiting", Usage: "rodney waitload", Desc: "Wait for the page load event.", Examples: []string{"rodney waitload"}},
 	"waitstable": {Group: "Waiting", Usage: "rodney waitstable", Desc: "Wait until the DOM stops changing.", Examples: []string{"rodney waitstable"}},
@@ -478,6 +488,22 @@ var commandHelp = map[string]cmdHelpEntry{
 		Examples: []string{"rodney ax-find --role button --name Checkout"}},
 	"ax-node": {Group: "Accessibility", Usage: "rodney ax-node <selector> [--json]",
 		Desc: "Show accessibility info for one element.", Examples: []string{"rodney ax-node \"#submit\""}},
+
+	// --- Viewport & device emulation ---
+	"viewport": {Group: "Viewport & device emulation", Usage: "rodney viewport <width> <height> [--clear]",
+		Desc:  "Set the page viewport size (affects layout, screenshots, innerWidth). Persists on the page until cleared or the browser stops.",
+		Flags: []string{"--clear   reset to default viewport"},
+		Examples: []string{"rodney viewport 1280 800", "rodney screenshot"}},
+	"device": {Group: "Viewport & device emulation", Usage: "rodney device <name> [--landscape] [--clear] [--list]",
+		Desc:  "Emulate a device: viewport, device pixel ratio, touch, and user agent in one step.",
+		Flags: []string{"--landscape   use the landscape orientation", "--clear   stop emulating", "--list    list available devices"},
+		Examples: []string{"rodney device iphone-x", "rodney device pixel-2 --landscape", "rodney device --list"}},
+	"headers": {Group: "Viewport & device emulation", Usage: "rodney headers [k=v ...] [--clear]",
+		Desc:  "Set extra HTTP headers sent with every request on this session (e.g. auth tokens, API versioning). No args: list current. Persists in the session state.",
+		Flags: []string{"--clear   remove all extra headers"},
+		Examples: []string{"rodney headers Authorization=Bearer tok", "rodney headers X-Api-Version=2", "rodney headers"}},
+	"waitnav": {Group: "Waiting", Usage: "rodney waitnav",
+		Desc: "Wait until the page navigates to a different URL (redirects, form submits, SPA route changes).", Examples: []string{"rodney waitnav"}},
 }
 
 // printCommandHelp renders the Tier-1 help block for one command.
@@ -786,6 +812,14 @@ func main() {
 		cmdRequestsStart(args)
 	case "requests-stop":
 		cmdRequestsStop(args)
+	case "viewport":
+		cmdViewport(args)
+	case "device":
+		cmdDevice(args)
+	case "waitnav":
+		cmdWaitNav(args)
+	case "headers":
+		cmdHeaders(args)
 	case "help", "-h", "--help":
 		// Tiered help: `help` = overview, `help <cmd>` = structured details,
 		// `help --json` = full machine-readable registry.
@@ -859,6 +893,29 @@ func withPage() (*State, *rod.Browser, *rod.Page) {
 	}
 	// Apply default timeout so element queries don't hang forever
 	page = page.Timeout(defaultTimeout)
+	// Re-apply persisted device emulation / viewport. rod resets to its
+	// default device (1280x800 + UA) on every new session attach, so
+	// overrides from previous CLI processes must be re-applied here.
+	if s.DeviceName != "" {
+		if dev, ok := devicePresets[s.DeviceName]; ok {
+			if s.DeviceLandscape {
+				dev = dev.Landscape()
+			}
+			_ = page.Emulate(dev)
+		}
+	} else if s.ViewportW > 0 && s.ViewportH > 0 {
+		_ = page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
+			Width: s.ViewportW, Height: s.ViewportH, DeviceScaleFactor: 1,
+		})
+	}
+	// Apply persisted extra headers (set via `rodney headers`)
+	if len(s.Headers) > 0 {
+		dict := make([]string, 0, len(s.Headers)*2)
+		for k, v := range s.Headers {
+			dict = append(dict, k, v)
+		}
+		_, _ = page.SetExtraHeaders(dict)
+	}
 	// Start video capture if recording is active
 	videoCleanup = maybeStartVideoCapture(page)
 	return s, browser, page
@@ -1899,8 +1956,18 @@ func cmdScrollEl(args []string) {
 }
 
 func cmdWait(args []string) {
+	// wait --url <substring>: wait until location.href contains substring
+	if len(args) >= 2 && args[0] == "--url" {
+		_, _, page := withPage()
+		url, err := waitURLContains(page, args[1], defaultTimeout)
+		if err != nil {
+			fatal("timeout waiting for URL containing %q", args[1])
+		}
+		fmt.Println(url)
+		return
+	}
 	if len(args) < 1 {
-		fatal("usage: rodney wait <selector>")
+		fatal("usage: rodney wait <selector> | rodney wait --url <substring>")
 	}
 	_, _, page := withPage()
 	el, err := page.Element(args[0])
@@ -4673,4 +4740,234 @@ func mustMarshal(v interface{}) []byte {
 		return []byte(`{"event":"error"}`)
 	}
 	return b
+}
+
+// devicePresets maps friendly names to rod device presets.
+var devicePresets = map[string]devices.Device{
+	"iphone-se":    devices.IPhone4,
+	"iphone-6":     devices.IPhone6or7or8,
+	"iphone-6-plus": devices.IPhone6or7or8Plus,
+	"iphone-x":     devices.IPhoneX,
+	"ipad":         devices.IPad,
+	"pixel-2":      devices.Pixel2,
+	"pixel-2-xl":   devices.Pixel2XL,
+	"nexus-5":      devices.Nexus5,
+	"nexus-6":      devices.Nexus6,
+	"galaxy-s3":    devices.GalaxySIII,
+	"galaxy-s5":    devices.GalaxyS5,
+	"laptop":       devices.LaptopWithMDPIScreen,
+}
+
+// cmdViewport sets the page viewport (CDP override persists on the target
+// across CLI invocations until cleared or the browser stops).
+func cmdViewport(args []string) {
+	clear := false
+	var rest []string
+	for _, a := range args {
+		if a == "--clear" {
+			clear = true
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	if clear {
+		s, err := loadState()
+		if err != nil {
+			fatal("%v", err)
+		}
+		s.ViewportW, s.ViewportH = 0, 0
+		if err := saveState(s); err != nil {
+			fatal("failed to save state: %v", err)
+		}
+		fmt.Println("Viewport cleared")
+		return
+	}
+	if len(rest) != 2 {
+		fatal("usage: rodney viewport <width> <height> [--clear]")
+	}
+	w, err := strconv.Atoi(rest[0])
+	if err != nil || w < 1 {
+		fatal("invalid width: %s", rest[0])
+	}
+	h, err := strconv.Atoi(rest[1])
+	if err != nil || h < 1 {
+		fatal("invalid height: %s", rest[1])
+	}
+	s, _, page := withPage()
+	if err := page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
+		Width: w, Height: h, DeviceScaleFactor: 1,
+	}); err != nil {
+		fatal("failed to set viewport: %v", err)
+	}
+	s.ViewportW, s.ViewportH = w, h
+	if err := saveState(s); err != nil {
+		fatal("failed to save state: %v", err)
+	}
+	fmt.Printf("Viewport set to %dx%d (persisted)\n", w, h)
+}
+
+// cmdDevice emulates a device preset: viewport + DPR + touch + user agent.
+func cmdDevice(args []string) {
+	var landscape, clear, list bool
+	var name string
+	for _, a := range args {
+		switch a {
+		case "--landscape":
+			landscape = true
+		case "--clear":
+			clear = true
+		case "--list":
+			list = true
+		default:
+			if name != "" {
+				fatal("unexpected argument: %s", a)
+			}
+			name = strings.ToLower(a)
+		}
+	}
+	if list {
+		keys := make([]string, 0, len(devicePresets))
+		for k := range devicePresets {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			d := devicePresets[k]
+			fmt.Printf("%-15s %s (portrait %dx%d)\n", k, d.Title, d.Screen.Vertical.Width, d.Screen.Vertical.Height)
+		}
+		return
+	}
+	if clear {
+		s, err := loadState()
+		if err != nil {
+			fatal("%v", err)
+		}
+		s.DeviceName = ""
+		s.DeviceLandscape = false
+		s.ViewportW, s.ViewportH = 0, 0
+		if err := saveState(s); err != nil {
+			fatal("failed to save state: %v", err)
+		}
+		fmt.Println("Device emulation cleared")
+		return
+	}
+	if name == "" {
+		fatal("usage: rodney device <name> [--landscape] [--clear] [--list]")
+	}
+	dev, ok := devicePresets[name]
+	if !ok {
+		fatal("unknown device %q (list with: rodney device --list)", name)
+	}
+	s, _, page := withPage()
+	if landscape {
+		dev = dev.Landscape()
+	}
+	if err := page.Emulate(dev); err != nil {
+		fatal("failed to emulate device: %v", err)
+	}
+	s.DeviceName = name
+	s.DeviceLandscape = landscape
+	s.ViewportW, s.ViewportH = 0, 0 // device preset includes its own viewport
+	if err := saveState(s); err != nil {
+		fatal("failed to save state: %v", err)
+	}
+	fmt.Printf("Emulating %s (persisted)\n", dev.Title)
+}
+
+// cmdWaitNav waits until the page's URL changes from its current value.
+func cmdWaitNav(args []string) {
+	_, _, page := withPage()
+	url, err := waitURLChanges(page, defaultTimeout)
+	if err != nil {
+		fatal("%v", err)
+	}
+	fmt.Println(url)
+}
+
+// waitURLContains polls location.href until it contains substr.
+func waitURLContains(page *rod.Page, substr string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if res, err := page.Eval(`() => location.href`); err == nil {
+			if u := res.Value.Str(); strings.Contains(u, substr) {
+				return u, nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return "", fmt.Errorf("timeout waiting for URL containing %q", substr)
+}
+
+// waitURLChanges polls location.href until it differs from the current value.
+func waitURLChanges(page *rod.Page, timeout time.Duration) (string, error) {
+	start, err := page.Eval(`() => location.href`)
+	if err != nil {
+		return "", err
+	}
+	startURL := start.Value.Str()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if res, err := page.Eval(`() => location.href`); err == nil {
+			if u := res.Value.Str(); u != startURL {
+				return u, nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return "", fmt.Errorf("timeout waiting for navigation (still at %s)", startURL)
+}
+
+// cmdHeaders sets/lists/clears extra HTTP headers persisted in the session
+// state and applied by every subsequent rodney command.
+func cmdHeaders(args []string) {
+	clear := false
+	var pairs []string
+	for _, a := range args {
+		if a == "--clear" {
+			clear = true
+		} else {
+			pairs = append(pairs, a)
+		}
+	}
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	if clear {
+		s.Headers = nil
+		if err := saveState(s); err != nil {
+			fatal("failed to save state: %v", err)
+		}
+		fmt.Println("Extra headers cleared")
+		return
+	}
+	if len(pairs) == 0 {
+		if len(s.Headers) == 0 {
+			fmt.Println("(no extra headers set)")
+			return
+		}
+		keys := make([]string, 0, len(s.Headers))
+		for k := range s.Headers {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("%s: %s\n", k, s.Headers[k])
+		}
+		return
+	}
+	if s.Headers == nil {
+		s.Headers = map[string]string{}
+	}
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || k == "" {
+			fatal("invalid header %q (expected name=value)", p)
+		}
+		s.Headers[k] = v
+	}
+	if err := saveState(s); err != nil {
+		fatal("failed to save state: %v", err)
+	}
+	fmt.Printf("Headers set (%d total — applied to every request from now on)\n", len(s.Headers))
 }

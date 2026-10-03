@@ -231,6 +231,20 @@ The `pattern` is a glob-style URL pattern (e.g. `*api.example.com/users*`). `--m
 
 This builds on rod's [request hijacking](https://github.com/go-rod/rod) (`Fetch` CDP domain). Use it to test error states, offline behaviour, or to stub third-party APIs in CI.
 
+### Viewport, device emulation, extra headers
+
+```bash
+rodney viewport 1280 800         # Set viewport (persists until cleared)
+rodney device iphone-x           # Emulate iPhone X: viewport + DPR + touch + UA
+rodney device --list             # All device presets
+rodney device --clear            # Stop emulating
+rodney headers Authorization="Bearer tok"   # Extra header on every request
+rodney headers                   # List current headers
+rodney headers --clear
+```
+
+Viewport, device, and headers persist in the session state — every subsequent rodney command re-applies them (rod would otherwise reset to its default device on each new connection).
+
 ### Handle JavaScript dialogs
 
 A JS dialog (alert/confirm/prompt) blocks the page — and every rodney command on it. `rodney dialog` is a persistent foreground process that handles every dialog until you stop it with Ctrl+C:

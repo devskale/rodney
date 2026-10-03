@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/devices"
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
@@ -55,6 +56,7 @@ func TestMain(m *testing.M) {
 	mux.HandleFunc("/testfile.txt", handleTestFile)
 	mux.HandleFunc("/animated", handleAnimated)
 	mux.HandleFunc("/empty", handleEmpty)
+	mux.HandleFunc("/headers", handleHeaders)
 	server := httptest.NewServer(mux)
 
 	env = &testEnv{browser: browser, server: server}
@@ -157,6 +159,15 @@ func handleAnimated(w http.ResponseWriter, r *http.Request) {
 <div id="c">0</div>
 <script>let n=0; setInterval(()=>{document.getElementById('c').textContent=++n;},100);</script>
 </body></html>`))
+}
+
+func handleHeaders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	hdrs := map[string]string{}
+	for k, v := range r.Header {
+		hdrs[k] = v[0]
+	}
+	json.NewEncoder(w).Encode(hdrs)
 }
 
 func handleEmpty(w http.ResponseWriter, r *http.Request) {
@@ -3570,5 +3581,110 @@ func TestRequestCollectorLive(t *testing.T) {
 	}
 	if len(pairs) < 2 {
 		t.Errorf("expected subresource requests too, got %d pairs", len(pairs))
+	}
+}
+
+// =====================
+// viewport/device/headers/waitnav tests
+// =====================
+
+// TestDevicePresets checks the preset registry has the advertised devices.
+func TestDevicePresets(t *testing.T) {
+	for _, name := range []string{"iphone-x", "iphone-6", "pixel-2", "ipad", "laptop", "nexus-5"} {
+		if _, ok := devicePresets[name]; !ok {
+			t.Errorf("devicePresets missing %q", name)
+		}
+	}
+	if d := devicePresets["iphone-x"]; d.Title != "iPhone X" {
+		t.Errorf("iphone-x title = %q", d.Title)
+	}
+}
+
+// TestEmulationFreshConnection mirrors withPage's re-apply logic: emulate a
+// device on a FRESH connection and verify UA + viewport took effect.
+func TestEmulationFreshConnection(t *testing.T) {
+	page := navigateTo(t, "/empty")
+	b2 := rod.New().ControlURL(testBrowserURL).MustConnect()
+	pages, _ := b2.Pages()
+	var target *rod.Page
+	for _, p := range pages {
+		if p.TargetID == page.TargetID {
+			target = p
+		}
+	}
+	if target == nil {
+		t.Fatal("page not found")
+	}
+	if err := target.Emulate(devices.IPhoneX); err != nil {
+		t.Fatalf("emulate failed: %v", err)
+	}
+	ua, err := target.Eval(`() => navigator.userAgent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ua.Value.Str(), "iPhone") {
+		t.Errorf("UA after emulate = %q, want iPhone", ua.Value.Str())
+	}
+}
+
+// TestExtraHeadersApplied verifies SetExtraHeaders reaches the server.
+func TestExtraHeadersApplied(t *testing.T) {
+	page := navigateTo(t, "/empty")
+	cleanup, err := page.SetExtraHeaders([]string{"X-Rodney-Test", "yes"})
+	if err != nil {
+		t.Fatalf("SetExtraHeaders failed: %v", err)
+	}
+	defer cleanup()
+	res, err := page.Eval(`() => fetch('/headers').then(r => r.text())`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Value.Str()
+	if !strings.Contains(strings.ToLower(got), "x-rodney-test") || !strings.Contains(got, "yes") {
+		t.Errorf("echoed headers missing X-Rodney-Test: %s", got)
+	}
+}
+
+// TestWaitURLHelpers covers waitURLContains and waitURLChanges.
+func TestWaitURLHelpers(t *testing.T) {
+	page := navigateTo(t, "/empty")
+
+	// waitURLChanges: JS navigates after 300ms
+	go func() {
+		_, _ = page.Eval(`() => { setTimeout(() => { location.href = '/form'; }, 300); return 1; }`)
+	}()
+	got, err := waitURLChanges(page, 5*time.Second)
+	if err != nil {
+		t.Fatalf("waitURLChanges: %v", err)
+	}
+	if !strings.HasSuffix(got, "/form") {
+		t.Errorf("waitURLChanges = %q, want /form", got)
+	}
+
+	// waitURLContains: already there → immediate
+	got, err = waitURLContains(page, "form", 2*time.Second)
+	if err != nil || !strings.HasSuffix(got, "/form") {
+		t.Errorf("waitURLContains = %q, %v", got, err)
+	}
+
+	// waitURLContains: never → timeout error
+	if _, err := waitURLContains(page, "definitely-not-here", 500*time.Millisecond); err == nil {
+		t.Error("waitURLContains should time out")
+	}
+}
+
+// TestViewportOverride checks SetViewport changes innerWidth.
+func TestViewportOverride(t *testing.T) {
+	page := navigateTo(t, "/empty")
+	err := page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{Width: 777, Height: 555, DeviceScaleFactor: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := page.Eval(`() => window.innerWidth`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Value.Int(); got != 777 {
+		t.Errorf("innerWidth after viewport 777 = %d", got)
 	}
 }
