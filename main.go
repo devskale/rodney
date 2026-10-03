@@ -52,22 +52,37 @@ const (
 // activeStateDir is set once at startup based on --local/--global flags.
 var activeStateDir string
 
-// extractScopeArgs scans args for --local/--global, removes them, and returns the mode.
-// If both appear, the last one wins.
-func extractScopeArgs(args []string) (scopeMode, []string) {
+// sessionName is set once at startup from --session <name> (see extractScopeArgs).
+var sessionName string
+
+// extractScopeArgs scans args for --local/--global/--session <name>, removes
+// them, and returns the mode + session name. If both scope flags appear, the
+// last one wins. --session routes state to ~/.rodney-sessions/<name>/ so
+// parallel sessions each own their active_page (and their own Chrome when
+// they start one) without stepping on each other.
+func extractScopeArgs(args []string) (scopeMode, string, []string) {
 	mode := scopeAuto
-	var filtered []string
-	for _, arg := range args {
-		switch arg {
+	session := ""
+	filtered := []string{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
 		case "--local":
 			mode = scopeLocal
 		case "--global":
 			mode = scopeGlobal
+		case "--session":
+			if i+1 < len(args) {
+				session = args[i+1]
+				i++ // skip the value
+			} else {
+				fmt.Fprintln(os.Stderr, "--session needs a name")
+				os.Exit(1)
+			}
 		default:
-			filtered = append(filtered, arg)
+			filtered = append(filtered, args[i])
 		}
 	}
-	return mode, filtered
+	return mode, session, filtered
 }
 
 // resolveStateDir determines the state directory based on scope mode and working directory.
@@ -109,6 +124,10 @@ func stateDir() string {
 	}
 	if dir := os.Getenv("RODNEY_HOME"); dir != "" {
 		return dir
+	}
+	if sessionName != "" {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".rodney-sessions", sessionName)
 	}
 	if activeStateDir != "" {
 		return activeStateDir
@@ -283,13 +302,14 @@ func main() {
 	}
 
 	// Extract --local/--global from all args before dispatching
-	mode, cleanedArgs := extractScopeArgs(os.Args[1:])
+	mode, session, cleanedArgs := extractScopeArgs(os.Args[1:])
 	if len(cleanedArgs) == 0 {
 		printUsage()
 		os.Exit(1)
 	}
 
 	wd, _ := os.Getwd()
+	sessionName = session
 	activeStateDir = resolveStateDir(mode, wd)
 
 	cmd := cleanedArgs[0]
@@ -710,11 +730,29 @@ func cmdStatus(args []string) {
 	}
 }
 
+// normalizeURL strips a single trailing slash (but keeps root "/") so
+// example.com == example.com/ for --reuse matching.
+func normalizeURL(u string) string {
+	if len(u) > 0 && strings.HasSuffix(u, "/") && !strings.HasSuffix(u, "://") && u != "/" {
+		return strings.TrimSuffix(u, "/")
+	}
+	return u
+}
+
 func cmdOpen(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney open <url>")
+		fatal("usage: rodney open <url> [--reuse]")
 	}
 	url := args[0]
+	reuse := false
+	for _, a := range args[1:] {
+		switch a {
+		case "--reuse":
+			reuse = true
+		default:
+			fatal("unknown flag: %s (open <url> [--reuse])", a)
+		}
+	}
 	// Add scheme if missing
 	if !strings.Contains(url, "://") {
 		url = "http://" + url
@@ -727,6 +765,25 @@ func cmdOpen(args []string) {
 	browser, err := connectBrowser(s)
 	if err != nil {
 		fatal("%v", err)
+	}
+
+	// --reuse: find an existing page already at this URL and switch to it
+	// instead of navigating the active page away. Parallel sessions opening
+	// the same URL converge on ONE page instead of opening it N times.
+	// Trailing slash is normalized (example.com == example.com/).
+	if reuse {
+		if pages, err := browser.Pages(); err == nil {
+			for i, p := range pages {
+				if info, _ := p.Info(); info != nil && normalizeURL(info.URL) == normalizeURL(url) {
+					s.ActivePage = i
+					if err := saveState(s); err != nil {
+						fatal("failed to save state: %v", err)
+				}
+					fmt.Printf("reuse: page [%d] %s\n", i, url)
+					return
+				}
+			}
+		}
 	}
 
 	// If no pages exist, create one
@@ -1915,20 +1972,16 @@ func cmdPages(args []string) {
 		}
 		info, _ := p.Info()
 		if info != nil {
-			fmt.Printf("%s [%d] %s - %s\n", marker, i, info.Title, info.URL)
+			fmt.Printf("%s [%d] (t:%s) %s - %s\n", marker, i, p.TargetID, info.Title, info.URL)
 		} else {
-			fmt.Printf("%s [%d] (unknown)\n", marker, i)
+			fmt.Printf("%s [%d] (t:%s) (unknown)\n", marker, i, p.TargetID)
 		}
 	}
 }
 
 func cmdPage(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney page <index>")
-	}
-	idx, err := strconv.Atoi(args[0])
-	if err != nil {
-		fatal("invalid index: %v", err)
+		fatal("usage: rodney page <index|t:targetID>")
 	}
 	s, err := loadState()
 	if err != nil {
@@ -1941,6 +1994,29 @@ func cmdPage(args []string) {
 	pages, err := browser.Pages()
 	if err != nil {
 		fatal("failed to list pages: %v", err)
+	}
+	// t:<targetID>: pin by the page's STABLE target ID — index-drift-proof for
+	// parallel sessions (another session opening a page shifts every index).
+	if strings.HasPrefix(args[0], "t:") {
+		tid := proto.TargetTargetID(strings.TrimPrefix(args[0], "t:"))
+		for i, p := range pages {
+			if p.TargetID == tid {
+				s.ActivePage = i
+				if err := saveState(s); err != nil {
+					fatal("failed to save state: %v", err)
+				}
+				info, _ := pages[i].Info()
+				if info != nil {
+					fmt.Printf("Switched to [%d] %s - %s\n", i, info.Title, info.URL)
+				}
+				return
+			}
+		}
+		fatal("no page with target ID %s (list with: rodney pages)", tid)
+	}
+	idx, err := strconv.Atoi(args[0])
+	if err != nil {
+		fatal("invalid index: %v", err)
 	}
 	if idx < 0 || idx >= len(pages) {
 		fatal("page index %d out of range (0-%d)", idx, len(pages)-1)

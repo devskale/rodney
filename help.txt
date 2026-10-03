@@ -7,7 +7,9 @@ Browser lifecycle:
   rodney status                   Show browser status
 
 Navigation:
-  rodney open <url>               Navigate to URL
+  rodney open <url> [--reuse]     Navigate to URL (--reuse: switch to an
+                                  existing page at that URL instead of
+                                  navigating the active page away)
   rodney back                     Go back in history
   rodney forward                  Go forward in history
   rodney reload [--hard]          Reload page (--hard bypasses cache)
@@ -50,7 +52,8 @@ Video recording:
 
 Tabs:
   rodney pages                    List all pages/tabs
-  rodney page <index>             Switch to page by index
+  rodney page <index|t:id>        Switch to page by index or target ID
+                                  (t:<id> is drift-proof for parallel sessions)
   rodney newpage [url]            Open a new page/tab
   rodney closepage [index]        Close a page/tab
 
@@ -88,6 +91,8 @@ Accessibility:
   rodney ax-node <selector> [--json]        Show accessibility info for element
 
 Options:
+  --session <name>                Use a named session (~/.rodney-sessions/<name>/)
+                                  — parallel sessions each own their state
   --local                         Use directory-scoped session (./.rodney/)
   --global                        Use global session (~/.rodney/)
   --version                       Print version and exit
