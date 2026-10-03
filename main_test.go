@@ -57,6 +57,7 @@ func TestMain(m *testing.M) {
 	server := httptest.NewServer(mux)
 
 	env = &testEnv{browser: browser, server: server}
+	testBrowserURL = u
 
 	code := m.Run()
 
@@ -2871,5 +2872,223 @@ func TestNormalizeURL(t *testing.T) {
 		if got := normalizeURL(in); got != want {
 			t.Errorf("normalizeURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// =====================
+// console tests
+// =====================
+
+// TestParseConsoleLevel checks level parsing for --level filtering.
+func TestParseConsoleLevel(t *testing.T) {
+	// Valid levels
+	for _, lvl := range []string{"", "log", "info", "warn", "warning", "error", "debug"} {
+		if _, _, err := parseConsoleLevel(lvl); err != nil {
+			t.Errorf("parseConsoleLevel(%q) returned error: %v", lvl, err)
+		}
+	}
+	// Invalid level
+	if _, _, err := parseConsoleLevel("bogus"); err == nil {
+		t.Error("parseConsoleLevel('bogus') should return error")
+	}
+}
+
+// TestMatchesConsoleEntry checks the --level/--browser filter logic.
+func TestMatchesConsoleEntry(t *testing.T) {
+	logEntry := consoleEntry{Source: "console", Type: "log", Args: []string{"hi"}}
+	errEntry := consoleEntry{Source: "console", Type: "error", Args: []string{"boom"}}
+	warnEntry := consoleEntry{Source: "console", Type: "warning", Args: []string{"careful"}}
+	browserEntry := consoleEntry{Source: "browser", Level: "warning", Text: "mixed content"}
+
+	// No filter: console entries pass, browser entries need --browser
+	if !matchesConsoleEntry(logEntry, "", false) {
+		t.Error("log entry should match with no filter")
+	}
+	if matchesConsoleEntry(browserEntry, "", false) {
+		t.Error("browser entry should NOT match without --browser")
+	}
+	if !matchesConsoleEntry(browserEntry, "", true) {
+		t.Error("browser entry should match with --browser")
+	}
+
+	// Level filters
+	if matchesConsoleEntry(logEntry, "error", false) {
+		t.Error("log entry should not match --level error")
+	}
+	if !matchesConsoleEntry(errEntry, "error", false) {
+		t.Error("error entry should match --level error")
+	}
+	if !matchesConsoleEntry(warnEntry, "warn", false) {
+		t.Error("warning entry should match --level warn")
+	}
+	if !matchesConsoleEntry(browserEntry, "warn", true) {
+		t.Error("browser warning entry should match --level warn with --browser")
+	}
+	if matchesConsoleEntry(browserEntry, "error", true) {
+		t.Error("browser warning entry should not match --level error")
+	}
+}
+
+// TestFormatConsoleEntry checks human and JSON rendering.
+func TestFormatConsoleEntry(t *testing.T) {
+	e := consoleEntry{Source: "console", Type: "error", Args: []string{"a", "b"}}
+	if got := formatConsoleEntry(e, false); got != "[error] a b" {
+		t.Errorf("human format = %q, want %q", got, "[error] a b")
+	}
+	be := consoleEntry{Source: "browser", Level: "warning", Text: "msg"}
+	if got := formatConsoleEntry(be, false); got != "[browser/warning] msg" {
+		t.Errorf("browser format = %q, want %q", got, "[browser/warning] msg")
+	}
+	j := formatConsoleEntry(e, true)
+	if !strings.Contains(j, `"type":"error"`) || !strings.Contains(j, `"args":["a","b"]`) {
+		t.Errorf("json format missing fields: %s", j)
+	}
+}
+
+// TestConsoleBufferRoundTrip writes entries to a temp JSONL file and reads
+// them back through readConsoleBuffer via a subprocess (captured stdout).
+func TestConsoleBufferRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "console.jsonl")
+	entries := []consoleEntry{
+		{Source: "console", Type: "log", Timestamp: 1, Args: []string{"hello"}},
+		{Source: "console", Type: "error", Timestamp: 2, Args: []string{"boom"}},
+		{Source: "browser", Level: "warning", Timestamp: 3, Text: "mixed"},
+	}
+	f, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, _ := json.Marshal(e)
+		f.Write(append(b, '\n'))
+	}
+	f.Close()
+
+	// Parse the file back with the same decoder readConsoleBuffer uses
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed []consoleEntry
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var e consoleEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("failed to parse line %q: %v", line, err)
+		}
+		parsed = append(parsed, e)
+	}
+	if len(parsed) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(parsed))
+	}
+	if parsed[0].Args[0] != "hello" || parsed[1].Type != "error" || parsed[2].Level != "warning" {
+		t.Errorf("round-trip mismatch: %+v", parsed)
+	}
+}
+
+// testBrowserURL is the debug URL of the shared test browser (set in TestMain).
+var testBrowserURL string
+
+// TestConsoleCollectorLive is an end-to-end test: spawn the _console collector
+// against the test browser, log from another connection, read the buffer.
+// Uses the helper-process pattern (GO_WANT_HELPER_PROCESS) because the test
+// binary does not contain the _console subcommand — the real rodney binary does.
+func TestConsoleCollectorLive(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		// We are the _console subprocess: args after -- are our real argv.
+		// Skip the "_console" argv[0] replica — cmdInternalConsole wants raw args.
+		args := os.Args
+		for i, a := range args {
+			if a == "--" {
+				sub := args[i+1:]
+				if len(sub) > 0 && sub[0] == "_console" {
+					sub = sub[1:]
+				}
+				cmdInternalConsole(sub)
+				return
+			}
+		}
+		return
+	}
+
+	page := navigateTo(t, "/")
+
+	// Spawn the collector subprocess: re-run this test binary with a flag that
+	// makes it act as the _console collector.
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "console.jsonl")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("cannot resolve test binary")
+	}
+	cmd := exec.Command(exe, "-test.run=TestConsoleCollectorLive", "--",
+		"_console", testBrowserURL, string(page.TargetID), logPath)
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start collector: %v", err)
+	}
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+
+	// Wait until the collector has created its buffer file (ready signal),
+	// then give it a moment to finish subscribing.
+	ready := false
+	for start := time.Now(); time.Since(start) < 15*time.Second; {
+		if _, err := os.Stat(logPath); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatal("collector never became ready")
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// Log from the page. Important: eval through a PageFromTarget connection —
+	// console events are only delivered to sessions Chrome associates with the
+	// target this way (eval via the TestMain session does not reach the collector).
+	browser2 := rod.New().ControlURL(testBrowserURL).MustConnect()
+	page2, err := browser2.PageFromTarget(page.TargetID)
+	if err != nil {
+		t.Fatalf("PageFromTarget failed: %v", err)
+	}
+	if _, err := page2.Eval(`() => { console.log('e2e collector test'); console.error('e2e err'); return 1; }`); err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+
+	// Wait for the collector to flush, then read the buffer
+	deadline := time.Now().Add(3 * time.Second)
+	var data []byte
+	for time.Now().Before(deadline) {
+		data, err = os.ReadFile(logPath)
+		if err == nil && strings.Count(string(data), "\n") >= 2 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("collector never wrote buffer: %v", err)
+	}
+
+	var logSeen, errSeen bool
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, `"e2e collector test"`) && strings.Contains(line, `"type":"log"`) {
+			logSeen = true
+		}
+		if strings.Contains(line, `"e2e err"`) && strings.Contains(line, `"type":"error"`) {
+			errSeen = true
+		}
+	}
+	if !logSeen {
+		t.Errorf("log entry missing from buffer:\n%s", data)
+	}
+	if !errSeen {
+		t.Errorf("error entry missing from buffer:\n%s", data)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"bufio"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -113,6 +114,8 @@ type State struct {
 	ProxyPort      int    `json:"proxy_port,omitempty"` // local port of auth proxy
 	VideoRecording bool   `json:"video_recording,omitempty"`
 	VideoDir       string `json:"video_dir,omitempty"`
+	ConsolePID     int    `json:"console_pid,omitempty"` // PID of background console collector
+	ConsoleLog     string `json:"console_log,omitempty"`  // path to console.jsonl buffer
 }
 
 // stateDirOverride allows tests to redirect state to a temp dir
@@ -255,6 +258,9 @@ var commandUsage = map[string]string{
 	"cookie-clear":  "rodney cookie-clear [--domain <domain>]",
 	"mock":          "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
 	"block":         "rodney block <pattern> [--method M]",
+	"console":       "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
+	"console-start": "rodney console-start",
+	"console-stop":  "rodney console-stop",
 }
 
 // containsHelpFlag reports whether args contains a --help request.
@@ -337,6 +343,8 @@ func main() {
 	switch cmd {
 	case "_proxy":
 		cmdInternalProxy(args) // hidden: runs the auth proxy helper
+	case "_console":
+		cmdInternalConsole(args) // hidden: runs the console collector
 	case "start":
 		cmdStart(args)
 	case "connect":
@@ -449,6 +457,12 @@ func main() {
 		cmdCookieDelete(args)
 	case "cookie-clear":
 		cmdCookieClear(args)
+	case "console":
+		cmdConsole(args)
+	case "console-start":
+		cmdConsoleStart(args)
+	case "console-stop":
+		cmdConsoleStop(args)
 	case "help", "-h", "--help":
 		printUsage()
 		os.Exit(0)
@@ -692,6 +706,15 @@ func cmdStop(args []string) {
 	if s.ProxyPID > 0 {
 		if proc, err := os.FindProcess(s.ProxyPID); err == nil {
 			proc.Signal(syscall.SIGTERM)
+		}
+	}
+	// Kill the console collector if running and remove its buffer
+	if s.ConsolePID > 0 {
+		if proc, err := os.FindProcess(s.ConsolePID); err == nil {
+			proc.Signal(syscall.SIGTERM)
+		}
+		if s.ConsoleLog != "" {
+			os.Remove(s.ConsoleLog)
 		}
 	}
 	// Clean up any active video recording
@@ -3109,6 +3132,443 @@ func cmdCookieClear(args []string) {
 		}
 		fmt.Println("All cookies cleared")
 	}
+}
+
+// consoleEntry is one line in the console.jsonl buffer.
+type consoleEntry struct {
+	Source    string   `json:"source"`              // "console" or "browser"
+	Type      string   `json:"type,omitempty"`       // console method: log, warn, error, ...
+	Level     string   `json:"level,omitempty"`      // browser log level: verbose, info, warning, error
+	Timestamp float64  `json:"timestamp"`            // ms since epoch
+	Args      []string `json:"args,omitempty"`       // serialized console args
+	Text      string   `json:"text,omitempty"`       // browser log message
+	URL       string   `json:"url,omitempty"`
+	Line      int      `json:"line,omitempty"`
+	Column   int      `json:"column,omitempty"`
+}
+
+// parseConsoleLevel maps a user-supplied --level value to the set of matching
+// console methods / browser levels. Unknown levels are an error.
+func parseConsoleLevel(level string) (map[string]bool, map[string]bool, error) {
+	consoleTypes := map[string]bool{}
+	browserLevels := map[string]bool{}
+	switch level {
+	case "":
+		return nil, nil, nil
+	case "log":
+		consoleTypes["log"] = true
+	case "info":
+		consoleTypes["info"] = true
+		browserLevels["info"] = true
+	case "warn", "warning":
+		consoleTypes["warning"] = true
+		browserLevels["warning"] = true
+	case "error":
+		consoleTypes["error"] = true
+		browserLevels["error"] = true
+	case "debug":
+		consoleTypes["debug"] = true
+		browserLevels["verbose"] = true
+	default:
+		return nil, nil, fmt.Errorf("unknown level %q (use log, info, warn, error or debug)", level)
+	}
+	return consoleTypes, browserLevels, nil
+}
+
+// matchesConsoleEntry reports whether an entry passes the --level/--browser filters.
+func matchesConsoleEntry(e consoleEntry, level string, includeBrowser bool) bool {
+	if e.Source == "browser" {
+		if !includeBrowser {
+			return false
+		}
+		if level == "" {
+			return true
+		}
+		_, browserLevels, _ := parseConsoleLevel(level)
+		return browserLevels[e.Level]
+	}
+	if level == "" {
+		return true
+	}
+	consoleTypes, _, _ := parseConsoleLevel(level)
+	return consoleTypes[e.Type]
+}
+
+// formatConsoleEntry renders one entry in human-readable or JSON form.
+func formatConsoleEntry(e consoleEntry, asJSON bool) string {
+	if asJSON {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Sprintf("{\"error\":\"marshal failed\"}")
+		}
+		return string(b)
+	}
+	if e.Source == "browser" {
+		return fmt.Sprintf("[browser/%s] %s", e.Level, e.Text)
+	}
+	msg := strings.Join(e.Args, " ")
+	return fmt.Sprintf("[%s] %s", e.Type, msg)
+}
+
+// consoleArgsToStrings converts RuntimeRemoteObject args to display strings.
+func consoleArgsToStrings(page *rod.Page, remoteArgs []*proto.RuntimeRemoteObject) []string {
+	args := []string{}
+	for _, a := range remoteArgs {
+		if v, err := page.ObjectToJSON(a); err == nil {
+			switch val := v.Val().(type) {
+			case string:
+				args = append(args, val)
+			default:
+				b, err := json.Marshal(val)
+				if err != nil {
+					args = append(args, fmt.Sprintf("%v", val))
+				} else {
+					args = append(args, string(b))
+				}
+			}
+		} else {
+			args = append(args, fmt.Sprintf("%v", a))
+		}
+	}
+	return args
+}
+
+// consoleEntryFromConsoleEvent builds a consoleEntry from a Runtime.consoleAPICalled event.
+func consoleEntryFromConsoleEvent(e *proto.RuntimeConsoleAPICalled) consoleEntry {
+	entry := consoleEntry{
+		Source:    "console",
+		Type:      string(e.Type),
+		Timestamp: float64(e.Timestamp),
+	}
+	if e.StackTrace != nil && len(e.StackTrace.CallFrames) > 0 {
+		entry.URL = e.StackTrace.CallFrames[0].URL
+		entry.Line = e.StackTrace.CallFrames[0].LineNumber
+		entry.Column = e.StackTrace.CallFrames[0].ColumnNumber
+	}
+	return entry
+}
+
+// consoleEntryFromBrowserEvent builds a consoleEntry from a Log.entryAdded event.
+func consoleEntryFromBrowserEvent(e *proto.LogEntryAdded) consoleEntry {
+	entry := consoleEntry{
+		Source:    "browser",
+		Level:     string(e.Entry.Level),
+		Timestamp: float64(e.Entry.Timestamp),
+		Text:      e.Entry.Text,
+		URL:       e.Entry.URL,
+	}
+	if e.Entry.LineNumber != nil {
+		entry.Line = *e.Entry.LineNumber
+	}
+	return entry
+}
+
+// streamConsoleEvents subscribes to console events on the given page and prints
+// them (filtered) until the process is interrupted. Blocking.
+func streamConsoleEvents(page *rod.Page, level string, asJSON, includeBrowser bool) {
+	// Buffer output so prints from the event goroutine don't interleave.
+	var mu sync.Mutex
+	printEntry := func(e consoleEntry) {
+		if !matchesConsoleEntry(e, level, includeBrowser) {
+			return
+		}
+		mu.Lock()
+		fmt.Println(formatConsoleEntry(e, asJSON))
+		mu.Unlock()
+	}
+
+	// EachEvent blocks until the returned wait func returns; we run until SIGINT.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+
+	// EachEvent returns a wait func that consumes the event channel and fires
+	// the callbacks — it must RUN. We call it in a goroutine and block in select{}
+	// until SIGINT (handled above exits the process).
+	wait := page.EachEvent(
+		func(e *proto.RuntimeConsoleAPICalled) {
+			entry := consoleEntryFromConsoleEvent(e)
+			entry.Args = consoleArgsToStrings(page, e.Args)
+			printEntry(entry)
+		},
+		func(e *proto.LogEntryAdded) {
+			printEntry(consoleEntryFromBrowserEvent(e))
+		},
+	)
+	go wait()
+	select {}
+}
+func readConsoleBuffer(path, level string, asJSON, includeBrowser bool) int {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		fatal("failed to open console buffer: %v", err)
+	}
+	defer f.Close()
+
+	n := 0
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(strings.TrimSpace(string(line))) == 0 {
+			continue
+		}
+		var e consoleEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue // skip malformed lines
+		}
+		if !matchesConsoleEntry(e, level, includeBrowser) {
+			continue
+		}
+		fmt.Println(formatConsoleEntry(e, asJSON))
+		n++
+	}
+	return n
+}
+
+// collectorRunning reports whether a console collector with the given PID is alive.
+func collectorRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func cmdConsole(args []string) {
+	var level string
+	var asJSON, includeBrowser, follow, clear bool
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--level":
+			i++
+			if i >= len(args) {
+				fatal("--level requires a value")
+			}
+			level = args[i]
+			if _, _, err := parseConsoleLevel(level); err != nil {
+				fatal("%v", err)
+			}
+		case "--json":
+			asJSON = true
+		case "--browser":
+			includeBrowser = true
+		case "--follow":
+			follow = true
+		case "--clear":
+			clear = true
+		default:
+			fatal("unknown flag: %s\nusage: rodney console [--level L] [--json] [--browser] [--follow] [--clear]", args[i])
+		}
+	}
+
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	// Phase 2: collector running -> read buffer (unless --follow streams live too)
+	if collectorRunning(s.ConsolePID) && s.ConsoleLog != "" {
+		n := readConsoleBuffer(s.ConsoleLog, level, asJSON, includeBrowser)
+		if clear {
+			os.Truncate(s.ConsoleLog, 0)
+		}
+		if !follow {
+			if n == 0 {
+				fmt.Println("(no matching console messages)")
+			}
+			return
+		}
+		// --follow: print buffered, then tail for new lines
+		tailConsoleBuffer(s.ConsoleLog, level, asJSON, includeBrowser)
+		return
+	}
+
+	// Phase 1: no collector -> live streaming on the active page
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	page, err := getActivePage(browser, s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	fmt.Fprintln(os.Stderr, "(streaming console — Ctrl+C to stop; use console-start for a background buffer)")
+	streamConsoleEvents(page, level, asJSON, includeBrowser)
+}
+
+// tailConsoleBuffer follows the JSONL file like tail -f and prints matching new entries.
+func tailConsoleBuffer(path, level string, asJSON, includeBrowser bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		fatal("failed to open console buffer: %v", err)
+	}
+	defer f.Close()
+	// Start at end: buffered entries were already printed
+		if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		fatal("seek failed: %v", err)
+	}
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			// No new data yet — poll
+			if err == io.EOF {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			fatal("read failed: %v", err)
+		}
+		if len(strings.TrimSpace(line)) == 0 {
+			continue
+		}
+		var e consoleEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		if matchesConsoleEntry(e, level, includeBrowser) {
+			fmt.Println(formatConsoleEntry(e, asJSON))
+		}
+	}
+}
+
+func cmdConsoleStart(args []string) {
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	if collectorRunning(s.ConsolePID) {
+		fmt.Println("Console collector already running")
+		return
+	}
+	// Verify the browser is reachable before spawning
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	page, err := getActivePage(browser, s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	targetID := string(page.TargetID)
+
+	logPath := filepath.Join(stateDir(), "console.jsonl")
+	exe, _ := os.Executable()
+	cmd := exec.Command(exe, "_console", s.DebugURL, targetID, logPath)
+	setSysProcAttr(cmd)
+	if err := cmd.Start(); err != nil {
+		fatal("failed to start console collector: %v", err)
+	}
+	// Read the PID BEFORE Release() — Release invalidates cmd.Process on some platforms.
+	pid := cmd.Process.Pid
+	cmd.Process.Release()
+
+	s.ConsolePID = pid
+	s.ConsoleLog = logPath
+	if err := saveState(s); err != nil {
+		fatal("failed to save state: %v", err)
+	}
+	fmt.Printf("Console collector started (PID %d) -> %s\n", s.ConsolePID, logPath)
+}
+
+func cmdConsoleStop(args []string) {
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	if !collectorRunning(s.ConsolePID) {
+		// Clean up stale state
+		s.ConsolePID = 0
+		s.ConsoleLog = ""
+		saveState(s)
+		fmt.Println("No console collector running")
+		return
+	}
+	if proc, err := os.FindProcess(s.ConsolePID); err == nil {
+		proc.Signal(syscall.SIGTERM)
+	}
+	s.ConsolePID = 0
+	logPath := s.ConsoleLog
+	s.ConsoleLog = ""
+	saveState(s)
+	if logPath != "" {
+		os.Remove(logPath)
+	}
+	fmt.Println("Console collector stopped")
+}
+
+// cmdInternalConsole is a hidden subcommand: rodney _console <debug-url> <targetID> <log-path>
+// It stays connected to Chrome and appends console events to the JSONL buffer.
+func cmdInternalConsole(args []string) {
+	if len(args) != 3 {
+		fatal("usage: rodney _console <debug-url> <targetID> <log-path>")
+	}
+	debugURL, targetID, logPath := args[0], args[1], args[2]
+
+	browser := rod.New().ControlURL(debugURL)
+	if err := browser.Connect(); err != nil {
+		fatal("_console: connect failed: %v", err)
+	}
+	defer browser.Close()
+
+	page, err := browser.PageFromTarget(proto.TargetTargetID(targetID))
+	if err != nil {
+		fatal("_console: page not found: %v", err)
+	}
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		fatal("_console: open log failed: %v", err)
+	}
+	defer f.Close()
+
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+
+	wait := page.EachEvent(
+		func(e *proto.RuntimeConsoleAPICalled) {
+			entry := consoleEntryFromConsoleEvent(e)
+			entry.Args = consoleArgsToStrings(page, e.Args)
+			writeConsoleLine(f, entry)
+		},
+		func(e *proto.LogEntryAdded) {
+			writeConsoleLine(f, consoleEntryFromBrowserEvent(e))
+		},
+	)
+	go wait()
+	select {}
+}
+
+// writeConsoleLine serializes one entry and appends it to the JSONL file.
+var consoleWriteMu sync.Mutex
+
+func writeConsoleLine(f *os.File, e consoleEntry) {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	consoleWriteMu.Lock()
+	defer consoleWriteMu.Unlock()
+	f.Write(append(b, '\n'))
 }
 
 // cmdInternalProxy is a hidden subcommand: rodney _proxy <port> <upstream> <authHeader>

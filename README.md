@@ -194,6 +194,35 @@ The `pattern` is a glob-style URL pattern (e.g. `*api.example.com/users*`). `--m
 
 This builds on rod's [request hijacking](https://github.com/go-rod/rod) (`Fetch` CDP domain). Use it to test error states, offline behaviour, or to stub third-party APIs in CI.
 
+### Console output
+
+Rodney can read JavaScript console output (`console.log`, `console.error`, …) and browser-level log entries. Two modes:
+
+**Live streaming** — without a background collector, `rodney console` streams events in real time (Ctrl+C to stop):
+
+```bash
+rodney console                    # stream all console output
+rodney console --level error      # only errors
+rodney console --json              # JSON lines (pipe to jq)
+rodney console --browser           # also browser log entries (network errors, security warnings)
+```
+
+**Background collector** — captures logs *between* commands into a buffer file, so nothing is missed while you script:
+
+```bash
+rodney console-start               # start collector (captures into console.jsonl)
+rodney open https://example.com
+rodney click "#submit"
+rodney waitstable
+rodney console                     # print everything that was logged
+rodney console --level error       # check for JS errors only
+rodney console --clear             # print and empty the buffer
+rodney console --follow            # print buffered, then tail live
+rodney console-stop                # stop collector, remove buffer
+```
+
+`rodney stop` also cleans up the collector. Output format is `[level] message` per line, or JSON lines with `--json` (`{"source":"console","type":"error","args":[...]}`).
+
 ### Directory-scoped sessions
 
 By default, Rodney stores state globally in `~/.rodney/`. You can instead create a session scoped to the current directory with `--local`:

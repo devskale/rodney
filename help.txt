@@ -85,6 +85,19 @@ Network interception:
                                     Fail matching requests client-side
                                     (persistent until Ctrl+C)
 
+Console:
+  rodney console [--level L] [--json] [--browser] [--follow] [--clear]
+                                    Show console output. Without a background
+                                    collector: live stream (Ctrl+C to stop).
+                                    With collector: print buffered messages.
+                                    --level: log, info, warn, error, debug
+                                    --json: JSON lines; --browser: also browser
+                                    log entries; --follow: tail mode; --clear:
+                                    print and empty the buffer
+  rodney console-start             Start background console collector (captures
+                                    logs between commands into console.jsonl)
+  rodney console-stop              Stop collector and remove the buffer
+
 Accessibility:
   rodney ax-tree [--depth N] [--json]       Dump accessibility tree
   rodney ax-find [--name N] [--role R] [--json]  Find accessible nodes
