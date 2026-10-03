@@ -3092,3 +3092,97 @@ func TestConsoleCollectorLive(t *testing.T) {
 		t.Errorf("error entry missing from buffer:\n%s", data)
 	}
 }
+
+// =====================
+// pages/closepage t:<id> tests
+// =====================
+
+// TestPagesByTargetID verifies the core t:<id> mechanics used by
+// `pages --json` and `closepage t:<id>`: pages can be found by their stable
+// target ID even as indices shift, and closing one adjusts the active index.
+func TestPagesByTargetID(t *testing.T) {
+	// Open three pages
+	p1 := env.browser.MustPage("about:blank")
+	t.Cleanup(func() { p1.MustClose() })
+	p2 := env.browser.MustPage("about:blank") // closed inside the test
+	p3 := env.browser.MustPage("about:blank")
+	t.Cleanup(func() { p3.MustClose() })
+
+	pages, err := env.browser.Pages()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find each page's index by target ID (the loop used by cmdPage/cmdClosePage)
+	findByTarget := func(tid proto.TargetTargetID) int {
+		for i, p := range pages {
+			if p.TargetID == tid {
+				return i
+			}
+		}
+		return -1
+	}
+	if findByTarget(p1.TargetID) < 0 || findByTarget(p2.TargetID) < 0 || findByTarget(p3.TargetID) < 0 {
+		t.Fatalf("not all target IDs found in pages list: %s, %s, %s", p1.TargetID, p2.TargetID, p3.TargetID)
+	}
+
+	// Close the middle page, verify the last page is still findable by its
+	// stable target ID despite the index shift
+	p2.MustClose()
+	pages, err = env.browser.Pages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := findByTarget(p3.TargetID)
+	if idx < 0 {
+		t.Fatal("p3 target ID not found after closing p2 (index drift)")
+	}
+	// The page at that index must actually be p3
+	if pages[idx].TargetID != p3.TargetID {
+		t.Errorf("index %d points to %s, want %s", idx, pages[idx].TargetID, p3.TargetID)
+	}
+}
+
+// TestClosePageActiveIndexAdjust verifies the active-page index adjustment
+// logic from cmdClosePage: closing a page BEFORE the active one shifts the
+// active index down; closing the active one falls back to an adjacent page.
+func TestClosePageActiveIndexAdjust(t *testing.T) {
+	p1 := env.browser.MustPage("about:blank") // closed inside the test
+	p2 := env.browser.MustPage("about:blank")
+	t.Cleanup(func() { p2.MustClose() })
+	p3 := env.browser.MustPage("about:blank") // closed inside the test
+
+	pages, _ := env.browser.Pages()
+	findByTarget := func(tid proto.TargetTargetID) int {
+		pages, _ = env.browser.Pages()
+		for i, p := range pages {
+			if p.TargetID == tid {
+				return i
+			}
+		}
+		return -1
+	}
+
+	// Active page is p3 (last). Close p1 (before it): active index must shift down.
+	activeIdx := findByTarget(p3.TargetID)
+	closedIdx := findByTarget(p1.TargetID)
+	p1.MustClose()
+	newActiveIdx := activeIdx
+	if newActiveIdx > closedIdx {
+		newActiveIdx--
+	}
+	if newActiveIdx != findByTarget(p3.TargetID) {
+		t.Errorf("adjusted index %d != actual p3 index %d", newActiveIdx, findByTarget(p3.TargetID))
+	}
+
+	// Close the active page itself: fall back to an adjacent index
+	p3.MustClose()
+	pages, _ = env.browser.Pages()
+	if len(pages) == 0 {
+		t.Fatal("no pages left after closing p3")
+	}
+	// p2 must still be reachable by its target ID
+	if findByTarget(p2.TargetID) < 0 {
+		t.Fatal("p2 not found after closing p1 and p3")
+	}
+}

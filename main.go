@@ -236,10 +236,10 @@ var commandUsage = map[string]string{
 	"screenshot-el": "rodney screenshot-el <selector> [file]",
 	"start-video":   "rodney start-video",
 	"stop-video":    "rodney stop-video [file]",
-	"pages":         "rodney pages",
-	"page":          "rodney page <index>",
+	"pages":         "rodney pages [--json]",
+	"page":          "rodney page <index|t:targetID>",
 	"newpage":       "rodney newpage [url]",
-	"closepage":     "rodney closepage [index]",
+	"closepage":     "rodney closepage [index|t:targetID]",
 	"exists":        "rodney exists <selector>",
 	"count":         "rodney count <selector>",
 	"visible":       "rodney visible <selector>",
@@ -1976,6 +1976,15 @@ func countFrames(dir string) int {
 }
 
 func cmdPages(args []string) {
+	asJSON := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			asJSON = true
+		default:
+			fatal("unknown flag: %s\nusage: rodney pages [--json]", a)
+		}
+	}
 	s, err := loadState()
 	if err != nil {
 		fatal("%v", err)
@@ -1987,6 +1996,30 @@ func cmdPages(args []string) {
 	pages, err := browser.Pages()
 	if err != nil {
 		fatal("failed to list pages: %v", err)
+	}
+	if asJSON {
+		type pageInfo struct {
+			Index  int    `json:"index"`
+			Target string `json:"target"` // stable target ID, usable as `page t:<id>` / `closepage t:<id>`
+			Title  string `json:"title"`
+			URL    string `json:"url"`
+			Active bool   `json:"active"`
+		}
+		list := make([]pageInfo, 0, len(pages))
+		for i, p := range pages {
+			pi := pageInfo{Index: i, Target: string(p.TargetID), Active: i == s.ActivePage}
+			if info, _ := p.Info(); info != nil {
+				pi.Title = info.Title
+				pi.URL = info.URL
+			}
+			list = append(list, pi)
+		}
+		b, err := json.MarshalIndent(list, "", "  ")
+		if err != nil {
+			fatal("failed to marshal pages: %v", err)
+		}
+		fmt.Println(string(b))
+		return
 	}
 	for i, p := range pages {
 		marker := " "
@@ -2115,26 +2148,50 @@ func cmdClosePage(args []string) {
 
 	idx := s.ActivePage
 	if len(args) > 0 {
-		idx, err = strconv.Atoi(args[0])
-		if err != nil {
-			fatal("invalid index: %v", err)
+		// t:<targetID>: close by the page's STABLE target ID — drift-proof for
+		// parallel sessions (indices shift when another session opens/closes pages).
+		if strings.HasPrefix(args[0], "t:") {
+			tid := proto.TargetTargetID(strings.TrimPrefix(args[0], "t:"))
+			found := -1
+			for i, p := range pages {
+				if p.TargetID == tid {
+					found = i
+					break
+				}
+			}
+			if found < 0 {
+				fatal("no page with target ID %s (list with: rodney pages)", tid)
+			}
+			idx = found
+		} else {
+			idx, err = strconv.Atoi(args[0])
+			if err != nil {
+				fatal("invalid index: %v", err)
+			}
 		}
 	}
 	if idx < 0 || idx >= len(pages) {
 		fatal("page index %d out of range", idx)
 	}
 
+	closedTarget := pages[idx].TargetID
 	pages[idx].MustClose()
 
-	// Adjust active page
-	if s.ActivePage >= len(pages)-1 {
-		s.ActivePage = len(pages) - 2
-	}
-	if s.ActivePage < 0 {
-		s.ActivePage = 0
+	// Adjust active page: if we closed the active page, fall back to an
+	// adjacent one; if the active index shifted past the end, clamp it.
+	if s.ActivePage == idx {
+		if s.ActivePage >= len(pages)-1 {
+			s.ActivePage = len(pages) - 2
+		}
+		if s.ActivePage < 0 {
+			s.ActivePage = 0
+		}
+	} else if s.ActivePage > idx {
+		// Active page was after the closed one — its index shifts down by one
+		s.ActivePage--
 	}
 	saveState(s)
-	fmt.Printf("Closed page %d\n", idx)
+	fmt.Printf("Closed page %d (t:%s)\n", idx, closedTarget)
 }
 
 func cmdExists(args []string) {

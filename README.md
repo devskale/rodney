@@ -124,11 +124,16 @@ rodney screenshot-el ".chart" chart.png   # Screenshot specific element
 
 ```bash
 rodney pages                    # List all tabs (* marks active)
+rodney pages --json             # Machine-readable: index, target, title, url, active
 rodney newpage https://...      # Open URL in new tab
 rodney page 1                   # Switch to tab by index
-rodney closepage 1              # Close tab by index
-rodney closepage                # Close active tab
+rodney page t:ABC123            # Switch by stable target ID (drift-proof)
+rodney closepage 1               # Close tab by index
+rodney closepage t:ABC123       # Close by target ID (drift-proof)
+rodney closepage                 # Close active tab
 ```
+
+Target IDs (`t:...`) are stable across page open/close in parallel sessions — indices shift when another session opens or closes pages, target IDs never do. Get them from `rodney pages` / `rodney pages --json`.
 
 ### Query elements
 

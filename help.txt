@@ -51,11 +51,12 @@ Video recording:
   rodney stop-video [file]        Stop and save (.gif default, .mp4 needs ffmpeg)
 
 Tabs:
-  rodney pages                    List all pages/tabs
+  rodney pages [--json]          List all pages/tabs (--json: machine-readable,
+                                  includes stable t:IDs and active flag)
   rodney page <index|t:id>        Switch to page by index or target ID
                                   (t:<id> is drift-proof for parallel sessions)
   rodney newpage [url]            Open a new page/tab
-  rodney closepage [index]        Close a page/tab
+  rodney closepage [index|t:id]   Close a page/tab (t:<id> drift-proof)
 
 Element checks:
   rodney exists <selector>        Check if element exists (exit 1 if not)
