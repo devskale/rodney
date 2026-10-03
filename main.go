@@ -40,7 +40,7 @@ var helpText string
 // version is the devskale fork version. Overridable via -ldflags "-X main.version=..."
 // for tagged releases, but the default keeps fork builds distinguishable from
 // upstream (which reports plain "dev").
-var version = "0.7.0" // devskale fork
+var version = "0.8.0" // devskale fork
 
 // scopeMode determines whether to use a local or global state directory.
 type scopeMode int
