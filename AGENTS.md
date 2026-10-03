@@ -20,16 +20,21 @@ asked ("bau", "test", "release", "validate").
 
 Actions are **disabled** in this fork (zero CI minutes — the account quota is
 scarce). Workflows live in `.github/workflows-disabled/` for reference; do not
-re-enable them. There is no CI safety net:
+re-enable them. The local guardrail replaces them — **depth ladder, fast by default**:
 
-- run `go test ./...` locally before pushing (when asked to)
-- the skill-level integration tests live in skale-skills
-  (`tests/rodney/test.sh`), not here
+- `./scripts/check.sh` — fast tier: `go vet` + `go build` (~seconds)
+- `./scripts/check.sh --full` — adds `go test` (~98s); run when asked ("test", "validate")
+- `git push` runs the fast tier automatically (pre-push hook, `.githooks/`)
+- `CHECK=1 git push` — full tier before pushing; `PUSH_SKIP_TESTS=1 git push` — WIP escape hatch
+- `main_test.go` must be updated in the same change as `main.go` — the fast tier does
+  NOT compile tests; the full tier catches it. Skill-level integration tests live in
+  skale-skills (`tests/rodney/test.sh`), not here.
 
 ## Conventions
 
 - `main_test.go` must be updated in the same change as `main.go` — a signature
-  change without its test update broke the build once (extractScopeArgs).
+  change without its test update broke the build once (extractScopeArgs); the
+  fast guardrail tier does not compile tests, so run `--full` when signatures change.
 - Version lives in `main.go` (`var version`), set via `-ldflags` for releases.
 - Upstream: `origin` (simonw/rodney). This fork: `fork` remote, branch `skale`.
   Rebase on upstream occasionally; keep fork-specific changes minimal and
