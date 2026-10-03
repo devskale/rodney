@@ -50,12 +50,22 @@ Waiting:
   rodney sleep <seconds>          Sleep for N seconds
 
 Screenshots:
-  rodney screenshot [-w N] [-h N] [file]  Take page screenshot
+  rodney screenshot [-w N] [-h N] [--full] [file]  Take page screenshot
+                                  (default: full page; -h limits to viewport)
   rodney screenshot-el <sel> [f]  Screenshot an element
 
 Video recording:
   rodney start-video              Start recording video
   rodney stop-video [file]        Stop and save (.gif default, .mp4 needs ffmpeg)
+
+Dialogs:
+  rodney dialog [--dismiss] [--text MSG] [--json]
+                                  Handle JS dialogs (alert/confirm/prompt).
+                                  Foreground process — handles every dialog
+                                  until Ctrl+C. Default accepts; --dismiss
+                                  cancels; --text answers prompts. Arm it
+                                  BEFORE triggering, an already-open dialog
+                                  blocks all other commands.
 
 Tabs:
   rodney pages [--json]          List all pages/tabs (--json: machine-readable,
@@ -105,6 +115,15 @@ Console:
   rodney console-start             Start background console collector (captures
                                     logs between commands into console.jsonl)
   rodney console-stop              Stop collector and remove the buffer
+
+Network requests:
+  rodney requests [--json] [--follow] [--clear]
+                                    Read network requests. Without a background
+                                    collector: live stream (Ctrl+C). With
+                                    collector: paired request/status lines
+  rodney requests-start            Start background request collector
+                                    (captures into requests.jsonl)
+  rodney requests-stop             Stop collector and remove the buffer
 
 Accessibility:
   rodney ax-tree [--depth N] [--json]       Dump accessibility tree

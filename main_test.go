@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/input"
+	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -771,7 +771,6 @@ func TestStateDir_EnvVar(t *testing.T) {
 		t.Errorf("stateDir() = %q, want %q", got, dir)
 	}
 }
-
 
 func TestMimeToExt(t *testing.T) {
 	tests := []struct {
@@ -2863,7 +2862,7 @@ func TestStateDir_SessionName(t *testing.T) {
 
 func TestNormalizeURL(t *testing.T) {
 	cases := map[string]string{
-		"https://example.com/":  "https://example.com",
+		"https://example.com/":   "https://example.com",
 		"https://example.com":    "https://example.com",
 		"https://example.com/a/": "https://example.com/a",
 		"/":                      "/",
@@ -3340,10 +3339,10 @@ func TestLevenshtein(t *testing.T) {
 func TestSuggestCommand(t *testing.T) {
 	// Real typos should suggest
 	for typo, want := range map[string]string{
-		"pgae":       "page",
-		"sreenshot":  "screenshot",
-		"cookie-st":  "cookie-set", // prefix
-		"presss":     "press",
+		"pgae":      "page",
+		"sreenshot": "screenshot",
+		"cookie-st": "cookie-set", // prefix
+		"presss":    "press",
 	} {
 		if got := suggestCommand(typo); got != want {
 			t.Errorf("suggestCommand(%q) = %q, want %q", typo, got, want)
@@ -3376,5 +3375,200 @@ func TestCommandHelpRegistry(t *testing.T) {
 	// Registry must marshal (help --json path)
 	if _, err := json.Marshal(commandHelp); err != nil {
 		t.Errorf("registry not marshalable: %v", err)
+	}
+}
+
+// =====================
+// dialog / requests / screenshot-full tests
+// =====================
+
+// TestPairRequestEntries checks request/response pairing by request_id.
+func TestPairRequestEntries(t *testing.T) {
+	entries := []requestEntry{
+		{Event: "request", RequestID: "A", Method: "GET", URL: "http://x/a"},
+		{Event: "request", RequestID: "B", Method: "POST", URL: "http://x/b"},
+		{Event: "response", RequestID: "B", Status: 201},
+		{Event: "request", RequestID: "C", Method: "GET", URL: "http://x/c"},
+		{Event: "failed", RequestID: "C", Error: "net::ERR_REFUSED"},
+	}
+	pairs := pairRequestEntries(entries)
+	if len(pairs) != 3 {
+		t.Fatalf("expected 3 pairs, got %d: %+v", len(pairs), pairs)
+	}
+	// B: paired with 201
+	if pairs[0].Method != "POST" || pairs[0].Status != 201 {
+		t.Errorf("pair[0] = %+v, want POST/201", pairs[0])
+	}
+	// C: failed
+	if pairs[1].URL != "http://x/c" || pairs[1].Error != "net::ERR_REFUSED" || pairs[1].Status != 0 {
+		t.Errorf("pair[1] = %+v, want failed C", pairs[1])
+	}
+	// A: in-flight, no status
+	if pairs[2].URL != "http://x/a" || pairs[2].Status != 0 {
+		t.Errorf("pair[2] = %+v, want in-flight A", pairs[2])
+	}
+	if got := formatRequestPair(pairs[1]); got != "GET http://x/c -> ERR" {
+		t.Errorf("formatRequestPair(failed) = %q", got)
+	}
+	if got := formatRequestPair(pairs[0]); got != "POST http://x/b -> 201" {
+		t.Errorf("formatRequestPair(ok) = %q", got)
+	}
+}
+
+// TestDialogArmFirst verifies the arm-first dialog pattern: handler armed on
+// a fresh connection BEFORE the dialog opens, dialog handled, page unblocked.
+func TestDialogArmFirst(t *testing.T) {
+	page := env.browser.MustPage(env.server.URL + "/empty")
+	t.Cleanup(func() {
+		// Guarded close: after cross-connection dialog handling, the page
+		// context may be canceled — tolerate close failures here.
+		defer func() { _ = recover() }()
+		page.MustClose()
+	})
+
+	// Arm on a fresh connection (the CLI cross-process pattern).
+	// NOTE: never Close() a second connection — rod's Close() sends CDP
+	// Browser.close and would kill the SHARED test browser.
+	b2 := rod.New().ControlURL(testBrowserURL).MustConnect()
+	pages, _ := b2.Pages()
+	var target *rod.Page
+	for _, p := range pages {
+		if p.TargetID == page.TargetID {
+			target = p
+		}
+	}
+	if target == nil {
+		t.Fatal("page not found")
+	}
+
+	got := make(chan string, 1)
+	go func() {
+		wait, handle := target.HandleDialog()
+		e := wait()
+		got <- string(e.Type) + "|" + e.Message
+		if err := handle(&proto.PageHandleJavaScriptDialog{Accept: true}); err != nil {
+			t.Errorf("handle failed: %v", err)
+		}
+	}()
+	time.Sleep(300 * time.Millisecond)
+
+	// Trigger: dialog opens, handler must fire and unblock the page
+	if _, err := page.Eval(`() => { setTimeout(() => alert("D-arm"), 30); return 1; }`); err != nil {
+		t.Fatalf("trigger eval failed: %v", err)
+	}
+	select {
+	case g := <-got:
+		if g != "alert|D-arm" {
+			t.Errorf("dialog = %q, want alert|D-arm", g)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler never fired")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if _, err := page.Eval(`() => 42`); err != nil {
+		t.Fatalf("page still blocked after dialog handled: %v", err)
+	}
+}
+
+// TestScreenshotFullPage verifies full-page capture is taller than viewport.
+func TestScreenshotFullPage(t *testing.T) {
+	page := env.browser.MustPage(env.server.URL + "/empty")
+	page.MustWaitLoad()
+	t.Cleanup(func() { page.MustClose() })
+	page.MustEval(`() => { document.body.style.height = '3000px'; return true; }`)
+
+	data, err := page.Screenshot(true, nil)
+	if err != nil {
+		t.Fatalf("full screenshot failed: %v", err)
+	}
+	w := int(uint32(data[16])<<24 | uint32(data[17])<<16 | uint32(data[18])<<8 | uint32(data[19]))
+	h := int(uint32(data[20])<<24 | uint32(data[21])<<16 | uint32(data[22])<<8 | uint32(data[23]))
+	if h < 2900 {
+		t.Errorf("full-page screenshot height = %d, want >= 2900 (3000px page)", h)
+	}
+	_ = w
+}
+
+// TestRequestCollectorLive is an e2e test: spawn the _requests collector,
+// load a page with fetches, read the paired buffer.
+func TestRequestCollectorLive(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		args := os.Args
+		for i, a := range args {
+			if a == "--" {
+				sub := args[i+1:]
+				if len(sub) > 0 && sub[0] == "_requests" {
+					sub = sub[1:]
+				}
+				cmdInternalRequests(sub)
+				return
+			}
+		}
+		return
+	}
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "requests.jsonl")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("cannot resolve test binary")
+	}
+	// Fresh page; collector subscribes to its target BEFORE navigation
+	page := env.browser.MustPage("about:blank")
+	t.Cleanup(func() { page.MustClose() })
+	cmd := exec.Command(exe, "-test.run=TestRequestCollectorLive", "--",
+		"_requests", testBrowserURL, string(page.TargetID), logPath)
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start collector: %v", err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+
+	// Wait for the collector to create its buffer (ready signal)
+	ready := false
+	for start := time.Now(); time.Since(start) < 15*time.Second; {
+		if _, err := os.Stat(logPath); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatal("collector never became ready")
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// Navigate — fires document + subresource requests on the subscribed target
+	page.Navigate(env.server.URL + "/form")
+	page.MustWaitLoad()
+	time.Sleep(1 * time.Second)
+
+	// Read and pair the buffer through the same path as `rodney requests`
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []requestEntry
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var e requestEntry
+		if json.Unmarshal([]byte(line), &e) == nil {
+			entries = append(entries, e)
+		}
+	}
+	pairs := pairRequestEntries(entries)
+	found := false
+	for _, p := range pairs {
+		if strings.HasSuffix(p.URL, "/form") && p.Status == 200 && p.Method == "GET" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("document request /form 200 not in pairs:\n%+v", pairs)
+	}
+	if len(pairs) < 2 {
+		t.Errorf("expected subresource requests too, got %d pairs", len(pairs))
 	}
 }

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -29,8 +29,8 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/input"
+	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -116,7 +116,9 @@ type State struct {
 	VideoRecording bool   `json:"video_recording,omitempty"`
 	VideoDir       string `json:"video_dir,omitempty"`
 	ConsolePID     int    `json:"console_pid,omitempty"` // PID of background console collector
-	ConsoleLog     string `json:"console_log,omitempty"`  // path to console.jsonl buffer
+	ConsoleLog     string `json:"console_log,omitempty"` // path to console.jsonl buffer
+	RequestPID     int    `json:"request_pid,omitempty"` // PID of background request collector
+	RequestLog     string `json:"request_log,omitempty"` // path to requests.jsonl buffer
 }
 
 // stateDirOverride allows tests to redirect state to a temp dir
@@ -203,69 +205,73 @@ func printUsage() {
 // commandUsage maps each command to its one-line usage string, used for
 // per-command `rodney <cmd> --help` output.
 var commandUsage = map[string]string{
-	"start":         "rodney start [--show] [--insecure|-k] [--local]",
-	"connect":       "rodney connect <host:port>",
-	"stop":          "rodney stop",
-	"status":        "rodney status",
-	"open":          "rodney open <url> [--reuse]",
-	"back":          "rodney back",
-	"forward":       "rodney forward",
-	"reload":        "rodney reload [--hard]",
-	"clear-cache":   "rodney clear-cache",
-	"url":           "rodney url",
-	"title":         "rodney title",
-	"html":          "rodney html [selector]",
-	"text":          "rodney text <selector>",
-	"attr":          "rodney attr <selector> <name>",
-	"pdf":           "rodney pdf [file]",
-	"js":            "rodney js <expression>",
-	"click":         "rodney click <selector>",
-	"input":         "rodney input <selector> <text>",
-	"clear":         "rodney clear <selector>",
-	"select":        "rodney select <selector> <value>",
-	"submit":        "rodney submit <selector>",
-	"hover":         "rodney hover <selector>",
-	"file":          "rodney file <selector> <path|->",
-	"download":      "rodney download <selector> [file|-]",
-	"focus":         "rodney focus <selector>",
-	"wait":          "rodney wait <selector>",
-	"waitload":      "rodney waitload",
-	"waitstable":    "rodney waitstable",
-	"waitidle":      "rodney waitidle",
-	"sleep":         "rodney sleep <seconds>",
-	"screenshot":    "rodney screenshot [-w N] [-h N] [file]",
-	"screenshot-el": "rodney screenshot-el <selector> [file]",
-	"start-video":   "rodney start-video",
-	"stop-video":    "rodney stop-video [file]",
-	"pages":         "rodney pages [--json]",
-	"page":          "rodney page <index|t:targetID>",
-	"newpage":       "rodney newpage [url]",
-	"closepage":     "rodney closepage [index|t:targetID]",
-	"press":         "rodney press <key> [key ...]",
-	"type":          "rodney type <text>",
-	"scroll":        "rodney scroll <x> <y> [--steps N]",
-	"scroll-el":     "rodney scroll-el <selector>",
-	"exists":        "rodney exists <selector>",
-	"count":         "rodney count <selector>",
-	"visible":       "rodney visible <selector>",
-	"assert":        "rodney assert <js-expression> [expected] [-m msg]",
-	"ua":            "rodney ua <user-agent>",
-	"timezone":      "rodney timezone <timezone-id>",
-	"locale":        "rodney locale <locale>",
-	"geo":           "rodney geo --lat <lat> --lon <lon>",
-	"media":         "rodney media [--type T] [--feature name=value ...]",
-	"ax-tree":       "rodney ax-tree [--depth N] [--json]",
-	"ax-find":       "rodney ax-find [--name N] [--role R] [--json]",
-	"ax-node":       "rodney ax-node <selector> [--json]",
-	"cookie-set":    "rodney cookie-set <name> <value> [--domain d] [--url u] [--path p] [--expires t] [--http-only] [--secure]",
-	"cookie-get":    "rodney cookie-get [name] [--json]",
-	"cookie-delete": "rodney cookie-delete <name> [--domain d] [--url u] [--path p]",
-	"cookie-clear":  "rodney cookie-clear [--domain <domain>]",
-	"mock":          "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
-	"block":         "rodney block <pattern> [--method M]",
-	"console":       "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
-	"console-start": "rodney console-start",
-	"console-stop":  "rodney console-stop",
+	"start":          "rodney start [--show] [--insecure|-k] [--local]",
+	"connect":        "rodney connect <host:port>",
+	"stop":           "rodney stop",
+	"status":         "rodney status",
+	"open":           "rodney open <url> [--reuse]",
+	"back":           "rodney back",
+	"forward":        "rodney forward",
+	"reload":         "rodney reload [--hard]",
+	"clear-cache":    "rodney clear-cache",
+	"url":            "rodney url",
+	"title":          "rodney title",
+	"html":           "rodney html [selector]",
+	"text":           "rodney text <selector>",
+	"attr":           "rodney attr <selector> <name>",
+	"pdf":            "rodney pdf [file]",
+	"js":             "rodney js <expression>",
+	"click":          "rodney click <selector>",
+	"input":          "rodney input <selector> <text>",
+	"clear":          "rodney clear <selector>",
+	"select":         "rodney select <selector> <value>",
+	"submit":         "rodney submit <selector>",
+	"hover":          "rodney hover <selector>",
+	"file":           "rodney file <selector> <path|->",
+	"download":       "rodney download <selector> [file|-]",
+	"focus":          "rodney focus <selector>",
+	"wait":           "rodney wait <selector>",
+	"waitload":       "rodney waitload",
+	"waitstable":     "rodney waitstable",
+	"waitidle":       "rodney waitidle",
+	"sleep":          "rodney sleep <seconds>",
+	"screenshot":     "rodney screenshot [-w N] [-h N] [--full] [file]",
+	"screenshot-el":  "rodney screenshot-el <selector> [file]",
+	"start-video":    "rodney start-video",
+	"stop-video":     "rodney stop-video [file]",
+	"pages":          "rodney pages [--json]",
+	"page":           "rodney page <index|t:targetID>",
+	"newpage":        "rodney newpage [url]",
+	"closepage":      "rodney closepage [index|t:targetID]",
+	"press":          "rodney press <key> [key ...]",
+	"type":           "rodney type <text>",
+	"scroll":         "rodney scroll <x> <y> [--steps N]",
+	"scroll-el":      "rodney scroll-el <selector>",
+	"exists":         "rodney exists <selector>",
+	"count":          "rodney count <selector>",
+	"visible":        "rodney visible <selector>",
+	"assert":         "rodney assert <js-expression> [expected] [-m msg]",
+	"ua":             "rodney ua <user-agent>",
+	"timezone":       "rodney timezone <timezone-id>",
+	"locale":         "rodney locale <locale>",
+	"geo":            "rodney geo --lat <lat> --lon <lon>",
+	"media":          "rodney media [--type T] [--feature name=value ...]",
+	"ax-tree":        "rodney ax-tree [--depth N] [--json]",
+	"ax-find":        "rodney ax-find [--name N] [--role R] [--json]",
+	"ax-node":        "rodney ax-node <selector> [--json]",
+	"cookie-set":     "rodney cookie-set <name> <value> [--domain d] [--url u] [--path p] [--expires t] [--http-only] [--secure]",
+	"cookie-get":     "rodney cookie-get [name] [--json]",
+	"cookie-delete":  "rodney cookie-delete <name> [--domain d] [--url u] [--path p]",
+	"cookie-clear":   "rodney cookie-clear [--domain <domain>]",
+	"mock":           "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
+	"block":          "rodney block <pattern> [--method M]",
+	"console":        "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
+	"console-start":  "rodney console-start",
+	"console-stop":   "rodney console-stop",
+	"dialog":         "rodney dialog [--dismiss] [--text MSG] [--json]",
+	"requests":       "rodney requests [--json] [--follow] [--clear]",
+	"requests-start": "rodney requests-start",
+	"requests-stop":  "rodney requests-stop",
 }
 
 // cmdHelpEntry is the structured help for one command (Tier 1/2 of the help
@@ -283,11 +289,11 @@ type cmdHelpEntry struct {
 var commandHelp = map[string]cmdHelpEntry{
 	// --- Browser lifecycle ---
 	"start": {Group: "Browser lifecycle", Usage: "rodney start [--show] [--insecure|-k] [--local]",
-		Desc:  "Launch Chrome (headless by default) and save the connection state. Other rodney commands reuse this browser.",
-		Flags: []string{"--show      launch visible Chrome instead of headless", "--insecure, -k   ignore certificate errors", "--local    directory-scoped session (./.rodney/)"},
+		Desc:     "Launch Chrome (headless by default) and save the connection state. Other rodney commands reuse this browser.",
+		Flags:    []string{"--show      launch visible Chrome instead of headless", "--insecure, -k   ignore certificate errors", "--local    directory-scoped session (./.rodney/)"},
 		Examples: []string{"rodney start", "rodney start --show --insecure"}},
 	"connect": {Group: "Browser lifecycle", Usage: "rodney connect <host:port>",
-		Desc:  "Attach to an already-running Chrome's remote debug port instead of launching one.",
+		Desc:     "Attach to an already-running Chrome's remote debug port instead of launching one.",
 		Examples: []string{"rodney connect 127.0.0.1:9222"}},
 	"stop": {Group: "Browser lifecycle", Usage: "rodney stop",
 		Desc: "Shut down Chrome, the auth proxy, the console collector; clear session state.", Examples: []string{"rodney stop"}},
@@ -296,11 +302,11 @@ var commandHelp = map[string]cmdHelpEntry{
 
 	// --- Navigation ---
 	"open": {Group: "Navigation", Usage: "rodney open <url> [--reuse]",
-		Desc:  "Navigate the active page to a URL. http:// is added if no scheme is given.",
-		Flags: []string{"--reuse    switch to an existing page already at that URL instead of navigating the active page away"},
+		Desc:     "Navigate the active page to a URL. http:// is added if no scheme is given.",
+		Flags:    []string{"--reuse    switch to an existing page already at that URL instead of navigating the active page away"},
 		Examples: []string{"rodney open https://example.com", "rodney open https://example.com --reuse"}},
-	"back":       {Group: "Navigation", Usage: "rodney back", Desc: "Go back one step in history.", Examples: []string{"rodney back"}},
-	"forward":    {Group: "Navigation", Usage: "rodney forward", Desc: "Go forward one step in history.", Examples: []string{"rodney forward"}},
+	"back":    {Group: "Navigation", Usage: "rodney back", Desc: "Go back one step in history.", Examples: []string{"rodney back"}},
+	"forward": {Group: "Navigation", Usage: "rodney forward", Desc: "Go forward one step in history.", Examples: []string{"rodney forward"}},
 	"reload": {Group: "Navigation", Usage: "rodney reload [--hard]",
 		Desc: "Reload the page.", Flags: []string{"--hard   bypass the cache"}, Examples: []string{"rodney reload --hard"}},
 	"clear-cache": {Group: "Navigation", Usage: "rodney clear-cache", Desc: "Clear the browser cache.", Examples: []string{"rodney clear-cache"}},
@@ -309,53 +315,53 @@ var commandHelp = map[string]cmdHelpEntry{
 	"url":   {Group: "Page info", Usage: "rodney url", Desc: "Print the current URL.", Examples: []string{"rodney url"}},
 	"title": {Group: "Page info", Usage: "rodney title", Desc: "Print the page title.", Examples: []string{"rodney title"}},
 	"html": {Group: "Page info", Usage: "rodney html [selector]",
-		Desc:  "Print HTML of the page or of one element (pretty-printed).",
+		Desc:     "Print HTML of the page or of one element (pretty-printed).",
 		Examples: []string{"rodney html", "rodney html \"#main\""}},
 	"text": {Group: "Page info", Usage: "rodney text <selector>",
-		Desc:  "Print the text content of an element.", Examples: []string{"rodney text \"h1\""}},
+		Desc: "Print the text content of an element.", Examples: []string{"rodney text \"h1\""}},
 	"attr": {Group: "Page info", Usage: "rodney attr <selector> <name>",
-		Desc:  "Print an attribute value of an element.", Examples: []string{"rodney attr \"a.link\" href"}},
+		Desc: "Print an attribute value of an element.", Examples: []string{"rodney attr \"a.link\" href"}},
 	"pdf": {Group: "Page info", Usage: "rodney pdf [file]",
-		Desc:  "Save the page as PDF (default: <title>.pdf).", Examples: []string{"rodney pdf out.pdf"}},
+		Desc: "Save the page as PDF (default: <title>.pdf).", Examples: []string{"rodney pdf out.pdf"}},
 
 	// --- Interaction ---
 	"js": {Group: "Interaction", Usage: "rodney js <expression>",
-		Desc:  "Evaluate a JavaScript expression on the active page. Bare expressions are auto-wrapped; statements like console.log work via the wrapper.",
+		Desc:     "Evaluate a JavaScript expression on the active page. Bare expressions are auto-wrapped; statements like console.log work via the wrapper.",
 		Examples: []string{"rodney js \"document.title\"", "rodney js \"1 + 1\""}},
 	"click": {Group: "Interaction", Usage: "rodney click <selector>",
-		Desc:  "Click an element (waits for it to appear).", Examples: []string{"rodney click \"button#submit\""}},
+		Desc: "Click an element (waits for it to appear).", Examples: []string{"rodney click \"button#submit\""}},
 	"input": {Group: "Interaction", Usage: "rodney input <selector> <text>",
-		Desc:  "Type text into an input field by setting .value (fast, but fires no key events — use 'type' or 'press' if the page reacts to keyboard input).",
+		Desc:     "Type text into an input field by setting .value (fast, but fires no key events — use 'type' or 'press' if the page reacts to keyboard input).",
 		Examples: []string{"rodney input \"#search\" \"query\""}},
 	"type": {Group: "Interaction", Usage: "rodney type <text>",
-		Desc:  "Type text into the focused element as real keyboard input — fires key and input events (SPA validation, autocomplete react to it).",
+		Desc:     "Type text into the focused element as real keyboard input — fires key and input events (SPA validation, autocomplete react to it).",
 		Examples: []string{"rodney focus \"#search\" && rodney type \"query\""}},
 	"press": {Group: "Interaction", Usage: "rodney press <key> [key ...]",
-		Desc:  "Press keys as real keyboard events. Combos use +; multiple args press in sequence.",
-		Flags: []string{"keys: enter, tab, escape, backspace, delete, space, up, down, left, right, home, end, pageup, pagedown, shift, ctrl, alt, meta, or a single character"},
+		Desc:     "Press keys as real keyboard events. Combos use +; multiple args press in sequence.",
+		Flags:    []string{"keys: enter, tab, escape, backspace, delete, space, up, down, left, right, home, end, pageup, pagedown, shift, ctrl, alt, meta, or a single character"},
 		Examples: []string{"rodney press enter", "rodney press ctrl+a", "rodney press shift tab"}},
 	"clear": {Group: "Interaction", Usage: "rodney clear <selector>",
-		Desc:  "Clear an input field.", Examples: []string{"rodney clear \"#search\""}},
+		Desc: "Clear an input field.", Examples: []string{"rodney clear \"#search\""}},
 	"file": {Group: "Interaction", Usage: "rodney file <selector> <path|->",
-		Desc:  "Set a file on a file input element. '-' reads the content from stdin.",
+		Desc:     "Set a file on a file input element. '-' reads the content from stdin.",
 		Examples: []string{"rodney file \"#upload\" photo.png", "cat data.csv | rodney file \"#upload\" -"}},
 	"download": {Group: "Interaction", Usage: "rodney download <selector> [file|-]",
-		Desc:  "Download the href/src target of an element. '-' streams to stdout.",
+		Desc:     "Download the href/src target of an element. '-' streams to stdout.",
 		Examples: []string{"rodney download \"a.pdf\"", "rodney download \"img.logo\" -"}},
 	"select": {Group: "Interaction", Usage: "rodney select <selector> <value>",
-		Desc:  "Select a dropdown option by value.", Examples: []string{"rodney select \"#topic\" \"support\""}},
+		Desc: "Select a dropdown option by value.", Examples: []string{"rodney select \"#topic\" \"support\""}},
 	"submit": {Group: "Interaction", Usage: "rodney submit <selector>",
-		Desc:  "Submit a form.", Examples: []string{"rodney submit \"form#login\""}},
+		Desc: "Submit a form.", Examples: []string{"rodney submit \"form#login\""}},
 	"hover": {Group: "Interaction", Usage: "rodney hover <selector>",
-		Desc:  "Hover over an element (triggers mouseenter/mouseover).", Examples: []string{"rodney hover \".menu-item\""}},
+		Desc: "Hover over an element (triggers mouseenter/mouseover).", Examples: []string{"rodney hover \".menu-item\""}},
 	"focus": {Group: "Interaction", Usage: "rodney focus <selector>",
-		Desc:  "Focus an element (use before 'type' or 'press').", Examples: []string{"rodney focus \"#email\""}},
+		Desc: "Focus an element (use before 'type' or 'press').", Examples: []string{"rodney focus \"#email\""}},
 	"scroll": {Group: "Interaction", Usage: "rodney scroll <x> <y> [--steps N]",
-		Desc:  "Scroll the page by x/y pixels (relative; negative y scrolls up).",
-		Flags: []string{"--steps N   scroll in N increments (smooth scroll, lazy-loading)"},
+		Desc:     "Scroll the page by x/y pixels (relative; negative y scrolls up).",
+		Flags:    []string{"--steps N   scroll in N increments (smooth scroll, lazy-loading)"},
 		Examples: []string{"rodney scroll 0 600", "rodney scroll 0 1000 --steps 10"}},
 	"scroll-el": {Group: "Interaction", Usage: "rodney scroll-el <selector>",
-		Desc:  "Scroll an element into view.", Examples: []string{"rodney scroll-el \"#footer\""}},
+		Desc: "Scroll an element into view.", Examples: []string{"rodney scroll-el \"#footer\""}},
 
 	// --- Waiting ---
 	"wait": {Group: "Waiting", Usage: "rodney wait <selector>",
@@ -366,10 +372,15 @@ var commandHelp = map[string]cmdHelpEntry{
 	"sleep":      {Group: "Waiting", Usage: "rodney sleep <seconds>", Desc: "Sleep for N seconds.", Examples: []string{"rodney sleep 2"}},
 
 	// --- Screenshots ---
-	"screenshot": {Group: "Screenshots", Usage: "rodney screenshot [-w N] [-h N] [file]",
-		Desc:  "Take a PNG screenshot of the page (default: screenshot.png; '-' for stdout).",
-		Flags: []string{"-w N   viewport width", "-h N   viewport height"},
-		Examples: []string{"rodney screenshot", "rodney screenshot -w 1280 -h 800 out.png"}},
+	"screenshot": {Group: "Screenshots", Usage: "rodney screenshot [-w N] [-h N] [--full] [file]",
+		Desc:     "Take a PNG screenshot. Default captures the FULL page; -h limits to the viewport height. '-' for stdout.",
+		Flags:    []string{"-w N       viewport width (default 1280)", "-h N       viewport height (limits capture to the viewport)", "--full     force full-page capture even with -h"},
+		Examples: []string{"rodney screenshot", "rodney screenshot --full page.png"}},
+	// --- Dialogs ---
+	"dialog": {Group: "Dialogs", Usage: "rodney dialog [--dismiss] [--text MSG] [--json]",
+		Desc:     "Handle JavaScript dialogs (alert/confirm/prompt/beforeunload). Runs as a persistent foreground process: handles every dialog that opens until Ctrl+C. Default accepts dialogs; use --dismiss to reject them.",
+		Flags:    []string{"--dismiss   dismiss (cancel) instead of accepting", "--text MSG   response text for prompt dialogs", "--json      JSON lines output"},
+		Examples: []string{"rodney open page.html && rodney dialog", "rodney dialog --dismiss"}},
 	"screenshot-el": {Group: "Screenshots", Usage: "rodney screenshot-el <selector> [file]",
 		Desc: "Screenshot a single element.", Examples: []string{"rodney screenshot-el \"#chart\""}},
 
@@ -381,34 +392,34 @@ var commandHelp = map[string]cmdHelpEntry{
 
 	// --- Tabs ---
 	"pages": {Group: "Tabs", Usage: "rodney pages [--json]",
-		Desc:  "List all pages/tabs. * marks the active one.",
-		Flags: []string{"--json   machine-readable: index, target, title, url, active"},
+		Desc:     "List all pages/tabs. * marks the active one.",
+		Flags:    []string{"--json   machine-readable: index, target, title, url, active"},
 		Examples: []string{"rodney pages", "rodney pages --json"}},
 	"page": {Group: "Tabs", Usage: "rodney page <index|t:targetID>",
-		Desc:  "Switch the active page. t:<id> pins by stable target ID — drift-proof when parallel sessions shift indices.",
+		Desc:     "Switch the active page. t:<id> pins by stable target ID — drift-proof when parallel sessions shift indices.",
 		Examples: []string{"rodney page 1", "rodney page t:ABC123"}},
-	"newpage":   {Group: "Tabs", Usage: "rodney newpage [url]", Desc: "Open a new page/tab and make it active.", Examples: []string{"rodney newpage https://example.com"}},
+	"newpage": {Group: "Tabs", Usage: "rodney newpage [url]", Desc: "Open a new page/tab and make it active.", Examples: []string{"rodney newpage https://example.com"}},
 	"closepage": {Group: "Tabs", Usage: "rodney closepage [index|t:targetID]",
-		Desc:  "Close a page (default: the active one). t:<id> is drift-proof; the active index is adjusted automatically.",
+		Desc:     "Close a page (default: the active one). t:<id> is drift-proof; the active index is adjusted automatically.",
 		Examples: []string{"rodney closepage", "rodney closepage t:ABC123"}},
 
 	// --- Element checks ---
 	"exists": {Group: "Element checks", Usage: "rodney exists <selector>",
 		Desc: "Check if an element exists. Exit 0 if yes, exit 1 if not.", Examples: []string{"rodney exists \".error\""}},
-	"count":  {Group: "Element checks", Usage: "rodney count <selector>", Desc: "Count matching elements.", Examples: []string{"rodney count \"li.item\""}},
+	"count": {Group: "Element checks", Usage: "rodney count <selector>", Desc: "Count matching elements.", Examples: []string{"rodney count \"li.item\""}},
 	"visible": {Group: "Element checks", Usage: "rodney visible <selector>",
 		Desc: "Check if an element is visible. Exit 0/1.", Examples: []string{"rodney visible \"#modal\""}},
 	"assert": {Group: "Element checks", Usage: "rodney assert <js-expression> [expected] [-m msg]",
-		Desc:  "Assert a JS expression is truthy (or equals 'expected'). Exit 1 on failure.",
-		Flags: []string{"-m, --message msg   custom failure message"},
+		Desc:     "Assert a JS expression is truthy (or equals 'expected'). Exit 1 on failure.",
+		Flags:    []string{"-m, --message msg   custom failure message"},
 		Examples: []string{"rodney assert \"document.title\" \"Dashboard\"", "rodney assert \"document.querySelectorAll('.row').length\" 5"}},
 
 	// --- Cookies ---
 	"cookie-set": {Group: "Cookies", Usage: "rodney cookie-set <name> <value> [--domain d] [--url u] [--path p] [--expires t] [--http-only] [--secure]",
-		Desc:  "Set a cookie. Defaults to the current page's URL/domain.",
+		Desc:     "Set a cookie. Defaults to the current page's URL/domain.",
 		Examples: []string{"rodney cookie-set session abc123"}},
 	"cookie-get": {Group: "Cookies", Usage: "rodney cookie-get [name] [--json]",
-		Desc:  "Get cookies: one value by name, or all cookies (--json for structured output).",
+		Desc:     "Get cookies: one value by name, or all cookies (--json for structured output).",
 		Examples: []string{"rodney cookie-get", "rodney cookie-get session --json"}},
 	"cookie-delete": {Group: "Cookies", Usage: "rodney cookie-delete <name> [--domain d] [--url u] [--path p]",
 		Desc: "Delete cookies by name (scoped by domain/url/path if given).", Examples: []string{"rodney cookie-delete session"}},
@@ -425,35 +436,45 @@ var commandHelp = map[string]cmdHelpEntry{
 	"geo": {Group: "Emulation", Usage: "rodney geo --lat <lat> --lon <lon>",
 		Desc: "Spoof geolocation coordinates.", Examples: []string{"rodney geo --lat 52.52 --lon 13.40"}},
 	"media": {Group: "Emulation", Usage: "rodney media [--type T] [--feature name=value ...]",
-		Desc: "Emulate media type or features (e.g. prefers-color-scheme).",
+		Desc:     "Emulate media type or features (e.g. prefers-color-scheme).",
 		Examples: []string{"rodney media --type print", "rodney media --feature prefers-color-scheme=dark"}},
 
 	// --- Network interception ---
 	"mock": {Group: "Network interception", Usage: "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
-		Desc:  "Serve a canned response for matching requests. Runs as a persistent foreground process — Ctrl+C to stop.",
-		Flags: []string{"--status N    HTTP status (default 200)", "--type MIME   content type (default text/plain)", "--method M    restrict to HTTP method", "response '-' reads body from stdin"},
+		Desc:     "Serve a canned response for matching requests. Runs as a persistent foreground process — Ctrl+C to stop.",
+		Flags:    []string{"--status N    HTTP status (default 200)", "--type MIME   content type (default text/plain)", "--method M    restrict to HTTP method", "response '-' reads body from stdin"},
 		Examples: []string{"rodney mock '*api/users*' '{\"id\":1}' --type application/json"}},
 	"block": {Group: "Network interception", Usage: "rodney block <pattern> [--method M]",
-		Desc:  "Fail matching requests client-side (offline behaviour). Persistent foreground process.",
+		Desc:     "Fail matching requests client-side (offline behaviour). Persistent foreground process.",
 		Examples: []string{"rodney block '*.ads.*'"}},
 
 	// --- Console ---
 	"console": {Group: "Console", Usage: "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
-		Desc:  "Read console output. Without a background collector: live stream (Ctrl+C). With collector (console-start): print buffered messages.",
-		Flags: []string{"--level L    filter: log, info, warn, error, debug", "--json       JSON lines output", "--browser    also browser-level log entries (network errors, security)", "--follow     print buffered, then tail live", "--clear      print and empty the buffer"},
+		Desc:     "Read console output. Without a background collector: live stream (Ctrl+C). With collector (console-start): print buffered messages.",
+		Flags:    []string{"--level L    filter: log, info, warn, error, debug", "--json       JSON lines output", "--browser    also browser-level log entries (network errors, security)", "--follow     print buffered, then tail live", "--clear      print and empty the buffer"},
 		Examples: []string{"rodney console --level error", "rodney console --json | jq 'select(.type==\"error\")'"}},
 	"console-start": {Group: "Console", Usage: "rodney console-start",
 		Desc: "Start the background console collector — captures console/browser logs between commands into console.jsonl.", Examples: []string{"rodney console-start"}},
 	"console-stop": {Group: "Console", Usage: "rodney console-stop",
 		Desc: "Stop the collector and remove the buffer.", Examples: []string{"rodney console-stop"}},
 
+	// --- Network requests ---
+	"requests": {Group: "Network requests", Usage: "rodney requests [--json] [--follow] [--clear]",
+		Desc:     "Read captured network requests. Without a background collector: live stream (Ctrl+C). With collector (requests-start): print buffered requests.",
+		Flags:    []string{"--json    JSON lines output", "--follow  print buffered, then tail live", "--clear   print and empty the buffer"},
+		Examples: []string{"rodney requests", "rodney requests --json | jq 'select(.status>=400)'"}},
+	"requests-start": {Group: "Network requests", Usage: "rodney requests-start",
+		Desc: "Start the background request collector — captures all requests/responses between commands into requests.jsonl.", Examples: []string{"rodney requests-start"}},
+	"requests-stop": {Group: "Network requests", Usage: "rodney requests-stop",
+		Desc: "Stop the request collector and remove the buffer.", Examples: []string{"rodney requests-stop"}},
+
 	// --- Accessibility ---
 	"ax-tree": {Group: "Accessibility", Usage: "rodney ax-tree [--depth N] [--json]",
-		Desc:  "Dump the accessibility tree (roles, names, states).",
-		Flags: []string{"--depth N   limit tree depth", "--json      structured output"},
+		Desc:     "Dump the accessibility tree (roles, names, states).",
+		Flags:    []string{"--depth N   limit tree depth", "--json      structured output"},
 		Examples: []string{"rodney ax-tree --depth 3"}},
 	"ax-find": {Group: "Accessibility", Usage: "rodney ax-find [--name N] [--role R] [--json]",
-		Desc:  "Find accessible nodes by name/role. Exit 1 if no match.",
+		Desc:     "Find accessible nodes by name/role. Exit 1 if no match.",
 		Examples: []string{"rodney ax-find --role button --name Checkout"}},
 	"ax-node": {Group: "Accessibility", Usage: "rodney ax-node <selector> [--json]",
 		Desc: "Show accessibility info for one element.", Examples: []string{"rodney ax-node \"#submit\""}},
@@ -506,11 +527,11 @@ func levenshtein(a, b string) int {
 	}
 	for i := 1; i <= len(ra); i++ {
 		for j := 1; j <= len(rb); j++ {
-		cost := 1
-		if ra[i-1] == rb[j-1] {
-			cost = 0
-		}
-			min := d[i-1][j] + 1 // deletion
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			min := d[i-1][j] + 1             // deletion
 			if v := d[i][j-1] + 1; v < min { // insertion
 				min = v
 			}
@@ -629,6 +650,8 @@ func main() {
 		cmdInternalProxy(args) // hidden: runs the auth proxy helper
 	case "_console":
 		cmdInternalConsole(args) // hidden: runs the console collector
+	case "_requests":
+		cmdInternalRequests(args) // hidden: runs the request collector
 	case "start":
 		cmdStart(args)
 	case "connect":
@@ -755,6 +778,14 @@ func main() {
 		cmdConsoleStart(args)
 	case "console-stop":
 		cmdConsoleStop(args)
+	case "dialog":
+		cmdDialog(args)
+	case "requests":
+		cmdRequests(args)
+	case "requests-start":
+		cmdRequestsStart(args)
+	case "requests-stop":
+		cmdRequestsStop(args)
 	case "help", "-h", "--help":
 		// Tiered help: `help` = overview, `help <cmd>` = structured details,
 		// `help --json` = full machine-readable registry.
@@ -1114,7 +1145,7 @@ func cmdOpen(args []string) {
 					s.ActivePage = i
 					if err := saveState(s); err != nil {
 						fatal("failed to save state: %v", err)
-				}
+					}
 					fmt.Printf("reuse: page [%d] %s\n", i, url)
 					return
 				}
@@ -1734,12 +1765,12 @@ func cmdFocus(args []string) {
 func keyNames() map[string]input.Key {
 	return map[string]input.Key{
 		"enter": input.Enter, "return": input.Enter,
-		"tab": input.Tab,
+		"tab":    input.Tab,
 		"escape": input.Escape, "esc": input.Escape,
 		"backspace": input.Backspace,
-		"delete": input.Delete, "del": input.Delete,
+		"delete":    input.Delete, "del": input.Delete,
 		"space": input.Space,
-		"up": input.ArrowUp, "down": input.ArrowDown,
+		"up":    input.ArrowUp, "down": input.ArrowDown,
 		"left": input.ArrowLeft, "right": input.ArrowRight,
 		"home": input.Home, "end": input.End,
 		"pageup": input.PageUp, "pagedown": input.PageDown,
@@ -1936,6 +1967,7 @@ func cmdScreenshot(args []string) {
 	fs.IntVar(width, "w", 1280, "")
 	height := fs.Int("height", 0, "")
 	fs.IntVar(height, "h", 0, "")
+	fs.Bool("full", false, "")
 
 	if err := fs.Parse(args); err != nil {
 		fatal("%v", err)
@@ -1945,6 +1977,9 @@ func cmdScreenshot(args []string) {
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "height" || f.Name == "h" {
 			fullPage = false
+		}
+		if f.Name == "full" {
+			fullPage = true
 		}
 	})
 
@@ -3644,15 +3679,15 @@ func cmdCookieClear(args []string) {
 
 // consoleEntry is one line in the console.jsonl buffer.
 type consoleEntry struct {
-	Source    string   `json:"source"`              // "console" or "browser"
-	Type      string   `json:"type,omitempty"`       // console method: log, warn, error, ...
-	Level     string   `json:"level,omitempty"`      // browser log level: verbose, info, warning, error
-	Timestamp float64  `json:"timestamp"`            // ms since epoch
-	Args      []string `json:"args,omitempty"`       // serialized console args
-	Text      string   `json:"text,omitempty"`       // browser log message
+	Source    string   `json:"source"`          // "console" or "browser"
+	Type      string   `json:"type,omitempty"`  // console method: log, warn, error, ...
+	Level     string   `json:"level,omitempty"` // browser log level: verbose, info, warning, error
+	Timestamp float64  `json:"timestamp"`       // ms since epoch
+	Args      []string `json:"args,omitempty"`  // serialized console args
+	Text      string   `json:"text,omitempty"`  // browser log message
 	URL       string   `json:"url,omitempty"`
 	Line      int      `json:"line,omitempty"`
-	Column   int      `json:"column,omitempty"`
+	Column    int      `json:"column,omitempty"`
 }
 
 // parseConsoleLevel maps a user-supplied --level value to the set of matching
@@ -3922,7 +3957,7 @@ func tailConsoleBuffer(path, level string, asJSON, includeBrowser bool) {
 	}
 	defer f.Close()
 	// Start at end: buffered entries were already printed
-		if _, err := f.Seek(0, io.SeekEnd); err != nil {
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		fatal("seek failed: %v", err)
 	}
 	go func() {
@@ -4079,6 +4114,13 @@ func writeConsoleLine(f *os.File, e consoleEntry) {
 	f.Write(append(b, '\n'))
 }
 
+// writeRawLine appends one pre-marshaled JSON line to a log file (thread-safe).
+func writeRawLine(f *os.File, b []byte) {
+	consoleWriteMu.Lock()
+	defer consoleWriteMu.Unlock()
+	f.Write(append(b, '\n'))
+}
+
 // cmdInternalProxy is a hidden subcommand: rodney _proxy <port> <upstream> <authHeader>
 // It runs a local auth proxy that forwards to the upstream proxy with credentials.
 func cmdInternalProxy(args []string) {
@@ -4183,4 +4225,452 @@ func proxyHTTP(w http.ResponseWriter, r *http.Request, upstream, authHeader stri
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+// cmdDialog handles JavaScript dialogs (alert/confirm/prompt/beforeunload).
+// Runs as a persistent FOREGROUND process (like mock/block): arms a handler
+// on the active page BEFORE dialogs open — an already-open dialog cannot be
+// reached from a second connection (CDP blocks while a modal is showing),
+// so the handler must be subscribed first. Handles every dialog until Ctrl+C.
+func cmdDialog(args []string) {
+	var dismiss, asJSON bool
+	var text string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dismiss":
+			dismiss = true
+		case "--json":
+			asJSON = true
+		case "--text":
+			i++
+			if i >= len(args) {
+				fatal("--text requires a value")
+			}
+			text = args[i]
+		default:
+			fatal("unknown flag: %s\nusage: rodney dialog [--dismiss] [--text MSG] [--json]", args[i])
+		}
+	}
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	page, err := getActivePage(browser, s)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+
+	action := "accepted"
+	if dismiss {
+		action = "dismissed"
+	}
+	fmt.Fprintf(os.Stderr, "(handling dialogs on the active page — %s — Ctrl+C to stop)\n", action)
+
+	for {
+		wait, handle := page.HandleDialog()
+		e := wait()
+		if asJSON {
+			b, _ := json.Marshal(map[string]string{
+				"type": string(e.Type), "message": e.Message, "default_prompt": e.DefaultPrompt, "action": action,
+			})
+			fmt.Println(string(b))
+		} else {
+			fmt.Printf("[%s] %s — %s\n", e.Type, e.Message, action)
+		}
+		if err := handle(&proto.PageHandleJavaScriptDialog{Accept: !dismiss, PromptText: text}); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to handle dialog: %v\n", err)
+		}
+	}
+}
+
+// requestEntry is one line in the requests.jsonl buffer (one CDP event each).
+type requestEntry struct {
+	Event     string  `json:"event"` // request | response | failed
+	RequestID string  `json:"request_id"`
+	Method    string  `json:"method,omitempty"`
+	URL       string  `json:"url,omitempty"`
+	Status    int     `json:"status,omitempty"`
+	Resource  string  `json:"resource,omitempty"`
+	Error     string  `json:"error,omitempty"`
+	Timestamp float64 `json:"timestamp"`
+}
+
+// requestPair is a rendered request line (request + its response/failed paired).
+type requestPair struct {
+	Method    string  `json:"method"`
+	URL       string  `json:"url"`
+	Status    int     `json:"status"`
+	Error     string  `json:"error,omitempty"`
+	Resource  string  `json:"resource,omitempty"`
+	Timestamp float64 `json:"timestamp"`
+}
+
+// pairRequestEntries pairs raw events by request_id into request pairs.
+func pairRequestEntries(entries []requestEntry) []requestPair {
+	reqs := map[string]requestEntry{}
+	var order []string
+	var out []requestPair
+	for _, e := range entries {
+		switch e.Event {
+		case "request":
+			reqs[e.RequestID] = e
+			order = append(order, e.RequestID)
+		case "response", "failed":
+			r, ok := reqs[e.RequestID]
+			if !ok {
+				continue
+			}
+			delete(reqs, e.RequestID)
+			out = append(out, requestPair{
+				Method: r.Method, URL: r.URL, Status: e.Status,
+				Error: e.Error, Resource: r.Resource, Timestamp: e.Timestamp,
+			})
+		}
+	}
+	// In-flight requests (no response yet)
+	for _, id := range order {
+		if r, ok := reqs[id]; ok {
+			out = append(out, requestPair{Method: r.Method, URL: r.URL, Resource: r.Resource, Timestamp: r.Timestamp})
+		}
+	}
+	return out
+}
+
+// formatRequestPair renders one pair for humans.
+func formatRequestPair(p requestPair) string {
+	status := "..."
+	if p.Status > 0 {
+		status = strconv.Itoa(p.Status)
+	}
+	if p.Error != "" {
+		status = "ERR"
+	}
+	return fmt.Sprintf("%s %s -> %s", p.Method, p.URL, status)
+}
+
+// streamRequestEvents subscribes to network events on the page and prints
+// paired request lines until interrupted. Blocking.
+func streamRequestEvents(page *rod.Page, asJSON bool) {
+	var mu sync.Mutex
+	var pending map[string]requestEntry = map[string]requestEntry{}
+	printLine := func(line string) {
+		mu.Lock()
+		fmt.Println(line)
+		mu.Unlock()
+	}
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+	wait := page.EachEvent(
+		func(e *proto.NetworkRequestWillBeSent) {
+			mu.Lock()
+			pending[string(e.RequestID)] = requestEntry{Event: "request", RequestID: string(e.RequestID), Method: e.Request.Method, URL: e.Request.URL, Resource: string(e.Type), Timestamp: float64(e.Timestamp)}
+			mu.Unlock()
+			if asJSON {
+				b, _ := json.Marshal(requestEntry{Event: "request", RequestID: string(e.RequestID), Method: e.Request.Method, URL: e.Request.URL, Resource: string(e.Type), Timestamp: float64(e.Timestamp)})
+				printLine(string(b))
+			} else {
+				printLine(fmt.Sprintf("%s %s -> ...", e.Request.Method, e.Request.URL))
+			}
+		},
+		func(e *proto.NetworkResponseReceived) {
+			if asJSON {
+				b, _ := json.Marshal(requestEntry{Event: "response", RequestID: string(e.RequestID), Status: e.Response.Status, Timestamp: float64(e.Timestamp)})
+				printLine(string(b))
+				return
+			}
+			mu.Lock()
+			r, ok := pending[string(e.RequestID)]
+			delete(pending, string(e.RequestID))
+			mu.Unlock()
+			if !ok {
+				return
+			}
+			printLine(fmt.Sprintf("%s %s -> %d", r.Method, r.URL, e.Response.Status))
+		},
+		func(e *proto.NetworkLoadingFailed) {
+			if asJSON {
+				b, _ := json.Marshal(requestEntry{Event: "failed", RequestID: string(e.RequestID), Error: e.ErrorText, Timestamp: float64(e.Timestamp)})
+				printLine(string(b))
+				return
+			}
+			mu.Lock()
+			r, ok := pending[string(e.RequestID)]
+			delete(pending, string(e.RequestID))
+			mu.Unlock()
+			if !ok {
+				return
+			}
+			printLine(fmt.Sprintf("%s %s -> ERR %s", r.Method, r.URL, e.ErrorText))
+		},
+	)
+	go wait()
+	select {}
+}
+
+// readRequestBuffer prints paired entries from the requests.jsonl file.
+func readRequestBuffer(path string, asJSON bool) int {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		fatal("failed to open request buffer: %v", err)
+	}
+	defer f.Close()
+	var entries []requestEntry
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var e requestEntry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	n := 0
+	for _, p := range pairRequestEntries(entries) {
+		if asJSON {
+			b, _ := json.Marshal(p)
+			fmt.Println(string(b))
+		} else {
+			fmt.Println(formatRequestPair(p))
+		}
+		n++
+	}
+	return n
+}
+
+func cmdRequests(args []string) {
+	var asJSON, follow, clear bool
+	for _, a := range args {
+		switch a {
+		case "--json":
+			asJSON = true
+		case "--follow":
+			follow = true
+		case "--clear":
+			clear = true
+		default:
+			fatal("unknown flag: %s\nusage: rodney requests [--json] [--follow] [--clear]", a)
+		}
+	}
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	if collectorRunning(s.RequestPID) && s.RequestLog != "" {
+		n := readRequestBuffer(s.RequestLog, asJSON)
+		if clear {
+			os.Truncate(s.RequestLog, 0)
+		}
+		if !follow {
+			if n == 0 {
+				fmt.Println("(no requests captured)")
+			}
+			return
+		}
+		tailRequestBuffer(s.RequestLog, asJSON)
+		return
+	}
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	page, err := getActivePage(browser, s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	fmt.Fprintln(os.Stderr, "(streaming requests — Ctrl+C to stop; use requests-start for a background buffer)")
+	streamRequestEvents(page, asJSON)
+}
+
+// tailRequestBuffer follows the JSONL file and prints paired new entries.
+func tailRequestBuffer(path string, asJSON bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		fatal("failed to open request buffer: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		fatal("seek failed: %v", err)
+	}
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+	reader := bufio.NewReader(f)
+	var pending map[string]requestEntry = map[string]requestEntry{}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			fatal("read failed: %v", err)
+		}
+		if len(strings.TrimSpace(line)) == 0 {
+			continue
+		}
+		var e requestEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		switch e.Event {
+		case "request":
+			pending[e.RequestID] = e
+			if !asJSON {
+				fmt.Printf("%s %s -> ...\n", e.Method, e.URL)
+			} else {
+				fmt.Println(line)
+			}
+		case "response", "failed":
+			if r, ok := pending[e.RequestID]; ok {
+				delete(pending, e.RequestID)
+				if asJSON {
+					fmt.Println(line)
+				} else if e.Event == "response" {
+					fmt.Printf("%s %s -> %d\n", r.Method, r.URL, e.Status)
+				} else {
+					fmt.Printf("%s %s -> ERR %s\n", r.Method, r.URL, e.Error)
+				}
+			} else if asJSON {
+				fmt.Println(line)
+			}
+		}
+	}
+}
+
+func cmdRequestsStart(args []string) {
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	if collectorRunning(s.RequestPID) {
+		fmt.Println("Request collector already running")
+		return
+	}
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	page, err := getActivePage(browser, s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	targetID := string(page.TargetID)
+
+	logPath := filepath.Join(stateDir(), "requests.jsonl")
+	exe, _ := os.Executable()
+	cmd := exec.Command(exe, "_requests", s.DebugURL, targetID, logPath)
+	setSysProcAttr(cmd)
+	if err := cmd.Start(); err != nil {
+		fatal("failed to start request collector: %v", err)
+	}
+	pid := cmd.Process.Pid
+	cmd.Process.Release()
+
+	s.RequestPID = pid
+	s.RequestLog = logPath
+	if err := saveState(s); err != nil {
+		fatal("failed to save state: %v", err)
+	}
+	fmt.Printf("Request collector started (PID %d) -> %s\n", pid, logPath)
+}
+
+func cmdRequestsStop(args []string) {
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	if !collectorRunning(s.RequestPID) {
+		s.RequestPID = 0
+		s.RequestLog = ""
+		saveState(s)
+		fmt.Println("No request collector running")
+		return
+	}
+	if proc, err := os.FindProcess(s.RequestPID); err == nil {
+		proc.Signal(syscall.SIGTERM)
+	}
+	s.RequestPID = 0
+	logPath := s.RequestLog
+	s.RequestLog = ""
+	saveState(s)
+	if logPath != "" {
+		os.Remove(logPath)
+	}
+	fmt.Println("Request collector stopped")
+}
+
+// cmdInternalRequests is a hidden subcommand: rodney _requests <debug-url> <targetID> <log-path>
+func cmdInternalRequests(args []string) {
+	if len(args) != 3 {
+		fatal("usage: rodney _requests <debug-url> <targetID> <log-path>")
+	}
+	debugURL, targetID, logPath := args[0], args[1], args[2]
+
+	browser := rod.New().ControlURL(debugURL)
+	if err := browser.Connect(); err != nil {
+		fatal("_requests: connect failed: %%v", err)
+	}
+	defer browser.Close()
+
+	page, err := browser.PageFromTarget(proto.TargetTargetID(targetID))
+	if err != nil {
+		fatal("_requests: page not found: %%v", err)
+	}
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		fatal("_requests: open log failed: %%v", err)
+	}
+	defer f.Close()
+
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+
+	wait := page.EachEvent(
+		func(e *proto.NetworkRequestWillBeSent) {
+			writeRawLine(f, mustMarshal(requestEntry{Event: "request", RequestID: string(e.RequestID), Method: e.Request.Method, URL: e.Request.URL, Resource: string(e.Type), Timestamp: float64(e.Timestamp)}))
+		},
+		func(e *proto.NetworkResponseReceived) {
+			writeRawLine(f, mustMarshal(requestEntry{Event: "response", RequestID: string(e.RequestID), Status: e.Response.Status, Timestamp: float64(e.Timestamp)}))
+		},
+		func(e *proto.NetworkLoadingFailed) {
+			writeRawLine(f, mustMarshal(requestEntry{Event: "failed", RequestID: string(e.RequestID), Error: e.ErrorText, Timestamp: float64(e.Timestamp)}))
+		},
+	)
+	go wait()
+	select {}
+}
+
+// mustMarshal is a nil-safe JSON marshal helper for log lines.
+func mustMarshal(v interface{}) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte(`{"event":"error"}`)
+	}
+	return b
 }

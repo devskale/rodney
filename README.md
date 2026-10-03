@@ -231,6 +231,32 @@ The `pattern` is a glob-style URL pattern (e.g. `*api.example.com/users*`). `--m
 
 This builds on rod's [request hijacking](https://github.com/go-rod/rod) (`Fetch` CDP domain). Use it to test error states, offline behaviour, or to stub third-party APIs in CI.
 
+### Handle JavaScript dialogs
+
+A JS dialog (alert/confirm/prompt) blocks the page — and every rodney command on it. `rodney dialog` is a persistent foreground process that handles every dialog until you stop it with Ctrl+C:
+
+```bash
+rodney dialog                     # arm it, accept every dialog (default)
+rodney dialog --dismiss           # reject (cancel) instead
+rodney dialog --text "hello"      # answer prompt() dialogs
+rodney open page-with-alert.html  # trigger — dialog gets handled, page unblocks
+```
+
+Arm it **before** triggering the dialog: an already-open dialog cannot be reached from a second connection.
+
+### Network requests
+
+Like `console`, but for network traffic — see every request with its status:
+
+```bash
+rodney requests                   # live stream (Ctrl+C)
+rodney requests-start             # background collector -> requests.jsonl
+rodney open https://example.com
+rodney requests                   # buffered: "GET https://... -> 200"
+rodney requests --json            # JSON lines (jq-friendly)
+rodney requests-stop
+```
+
 ### Console output
 
 Rodney can read JavaScript console output (`console.log`, `console.error`, …) and browser-level log entries. Two modes:
