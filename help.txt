@@ -1,7 +1,9 @@
 rodney - Chrome automation from the command line
 
 Browser lifecycle:
-  rodney start [--show] [--insecure | -k]  Launch Chrome (headless by default, --show for visible)
+  rodney start [--show] [--insecure|-k] [--incognito]
+                                  Launch Chrome (--show visible, --incognito uses a
+                                  throwaway profile deleted on stop)
   rodney connect <host:port>      Connect to existing Chrome on remote debug port
   rodney stop                     Shut down Chrome
   rodney status                   Show browser status
@@ -22,6 +24,9 @@ Page info:
   rodney text <selector>          Print text content of element
   rodney attr <selector> <name>   Print attribute value
   rodney pdf [file]               Save page as PDF
+  rodney resource <url> [file|-]  Print cached body of a loaded resource
+                                  (no new request; substring URL match)
+  rodney history                  Print navigation history (* marks current)
 
 Interaction:
   rodney js <expression>          Evaluate JavaScript expression
@@ -140,6 +145,10 @@ Accessibility:
   rodney ax-tree [--depth N] [--json]       Dump accessibility tree
   rodney ax-find [--name N] [--role R] [--json]  Find accessible nodes
   rodney ax-node <selector> [--json]        Show accessibility info for element
+
+Selector convention:
+  Commands taking <selector> accept CSS by default. Selectors starting
+  with "//" or "(" are treated as XPath (e.g. rodney click "//button[@id='x']").
 
 Options:
   --session <name>                Use a named session (~/.rodney-sessions/<name>/)

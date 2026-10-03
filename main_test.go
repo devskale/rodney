@@ -1108,7 +1108,7 @@ func TestFormatAssertFail_EqualityWithMessage(t *testing.T) {
 // =====================
 
 func TestParseStartArgs_NoFlags(t *testing.T) {
-	insecure, headless, err := parseStartArgs([]string{})
+	insecure, headless, _, err := parseStartArgs([]string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1121,7 +1121,7 @@ func TestParseStartArgs_NoFlags(t *testing.T) {
 }
 
 func TestParseStartArgs_ShowFlag(t *testing.T) {
-	insecure, headless, err := parseStartArgs([]string{"--show"})
+	insecure, headless, _, err := parseStartArgs([]string{"--show"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1134,7 +1134,7 @@ func TestParseStartArgs_ShowFlag(t *testing.T) {
 }
 
 func TestParseStartArgs_InsecureFlag(t *testing.T) {
-	insecure, headless, err := parseStartArgs([]string{"--insecure"})
+	insecure, headless, _, err := parseStartArgs([]string{"--insecure"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1147,7 +1147,7 @@ func TestParseStartArgs_InsecureFlag(t *testing.T) {
 }
 
 func TestParseStartArgs_InsecureShortFlag(t *testing.T) {
-	insecure, _, err := parseStartArgs([]string{"-k"})
+	insecure, _, _, err := parseStartArgs([]string{"-k"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1157,7 +1157,7 @@ func TestParseStartArgs_InsecureShortFlag(t *testing.T) {
 }
 
 func TestParseStartArgs_ShowAndInsecure(t *testing.T) {
-	insecure, headless, err := parseStartArgs([]string{"--show", "--insecure"})
+	insecure, headless, _, err := parseStartArgs([]string{"--show", "--insecure"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1170,7 +1170,7 @@ func TestParseStartArgs_ShowAndInsecure(t *testing.T) {
 }
 
 func TestParseStartArgs_UnknownFlag(t *testing.T) {
-	_, _, err := parseStartArgs([]string{"--bogus"})
+	_, _, _, err := parseStartArgs([]string{"--bogus"})
 	if err == nil {
 		t.Fatal("expected error for unknown flag --bogus")
 	}
@@ -2608,7 +2608,14 @@ func TestStopVideo_MP4FallsBackToGIFWithoutFfmpeg(t *testing.T) {
 
 	page := navigateTo(t, "/animated")
 	stop := startVideoCapture(page, framesDir)
-	time.Sleep(1 * time.Second)
+	// Wait until at least one frame exists (blind sleeps flake under load)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if countFrames(framesDir) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	stop()
 
 	s := &State{DebugURL: "ws://fake", ChromePID: 99999, VideoRecording: true, VideoDir: framesDir}
@@ -3686,5 +3693,74 @@ func TestViewportOverride(t *testing.T) {
 	}
 	if got := w.Value.Int(); got != 777 {
 		t.Errorf("innerWidth after viewport 777 = %d", got)
+	}
+}
+
+// =====================
+// xpath / resource / history tests
+// =====================
+
+// TestXPathSelectors verifies pageEl/pageEls route XPath selectors
+// (// and ( prefixes) to rod's XPath APIs.
+func TestXPathSelectors(t *testing.T) {
+	page := navigateTo(t, "/")
+
+	// XPath find
+	el, err := pageEl(page, "//nav//a")
+	if err != nil {
+		t.Fatalf("pageEl xpath failed: %v", err)
+	}
+	txt, err := el.Text()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txt != "About" {
+		t.Errorf("xpath //nav//a text = %q, want About", txt)
+	}
+
+	// XPath plural
+	els, err := pageEls(page, "//nav//a")
+	if err != nil || len(els) != 2 {
+		t.Errorf("pageEls xpath = %d els, %v; want 2", len(els), err)
+	}
+
+	// CSS still works
+	el, err = pageEl(page, "nav a")
+	if err != nil {
+		t.Fatalf("pageEl css failed: %v", err)
+	}
+	if txt, _ := el.Text(); txt != "About" {
+		t.Errorf("css nav a text = %q", txt)
+	}
+}
+
+// TestResourceCachedBody verifies GetResource returns loaded bodies.
+func TestResourceCachedBody(t *testing.T) {
+	page := navigateTo(t, "/testfile.txt")
+	// wait until resource is loaded
+	time.Sleep(300 * time.Millisecond)
+	data, err := page.GetResource(env.server.URL + "/testfile.txt")
+	if err != nil {
+		t.Fatalf("GetResource failed: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("resource body empty")
+	}
+}
+
+// TestNavigationHistory verifies GetNavigationHistory after two navigations.
+func TestNavigationHistory(t *testing.T) {
+	page := navigateTo(t, "/")
+	page.Navigate(env.server.URL + "/form")
+	page.MustWaitLoad()
+	h, err := proto.PageGetNavigationHistory{}.Call(page)
+	if err != nil {
+		t.Fatalf("GetNavigationHistory failed: %v", err)
+	}
+	if len(h.Entries) < 2 {
+		t.Errorf("expected >=2 history entries, got %d", len(h.Entries))
+	}
+	if h.CurrentIndex != len(h.Entries)-1 {
+		t.Errorf("current index = %d, want last entry", h.CurrentIndex)
 	}
 }

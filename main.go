@@ -125,6 +125,7 @@ type State struct {
 	ViewportH      int    `json:"viewport_h,omitempty"`
 	DeviceName     string `json:"device_name,omitempty"` // persisted device emulation preset
 	DeviceLandscape bool  `json:"device_landscape,omitempty"`
+	Incognito      bool  `json:"incognito,omitempty"` // throwaway profile, removed on stop
 }
 
 // stateDirOverride allows tests to redirect state to a temp dir
@@ -211,7 +212,7 @@ func printUsage() {
 // commandUsage maps each command to its one-line usage string, used for
 // per-command `rodney <cmd> --help` output.
 var commandUsage = map[string]string{
-	"start":          "rodney start [--show] [--insecure|-k] [--local]",
+	"start":          "rodney start [--show] [--insecure|-k] [--incognito] [--local]",
 	"connect":        "rodney connect <host:port>",
 	"stop":           "rodney stop",
 	"status":         "rodney status",
@@ -282,6 +283,8 @@ var commandUsage = map[string]string{
 	"device":        "rodney device <name> [--landscape] [--clear] [--list]",
 	"waitnav":       "rodney waitnav",
 	"headers":       "rodney headers [k=v ...] [--clear]",
+	"resource":      "rodney resource <url> [file|-]",
+	"history":       "rodney history",
 }
 
 // cmdHelpEntry is the structured help for one command (Tier 1/2 of the help
@@ -298,9 +301,9 @@ type cmdHelpEntry struct {
 // commandUsage; Desc/Flags/Examples power progressive discovery for agents.
 var commandHelp = map[string]cmdHelpEntry{
 	// --- Browser lifecycle ---
-	"start": {Group: "Browser lifecycle", Usage: "rodney start [--show] [--insecure|-k] [--local]",
+	"start": {Group: "Browser lifecycle", Usage: "rodney start [--show] [--insecure|-k] [--incognito] [--local]",
 		Desc:     "Launch Chrome (headless by default) and save the connection state. Other rodney commands reuse this browser.",
-		Flags:    []string{"--show      launch visible Chrome instead of headless", "--insecure, -k   ignore certificate errors", "--local    directory-scoped session (./.rodney/)"},
+		Flags:    []string{"--show      launch visible Chrome instead of headless", "--insecure, -k   ignore certificate errors", "--incognito  throwaway profile, deleted on stop", "--local    directory-scoped session (./.rodney/)"},
 		Examples: []string{"rodney start", "rodney start --show --insecure"}},
 	"connect": {Group: "Browser lifecycle", Usage: "rodney connect <host:port>",
 		Desc:     "Attach to an already-running Chrome's remote debug port instead of launching one.",
@@ -504,6 +507,13 @@ var commandHelp = map[string]cmdHelpEntry{
 		Examples: []string{"rodney headers Authorization=Bearer tok", "rodney headers X-Api-Version=2", "rodney headers"}},
 	"waitnav": {Group: "Waiting", Usage: "rodney waitnav",
 		Desc: "Wait until the page navigates to a different URL (redirects, form submits, SPA route changes).", Examples: []string{"rodney waitnav"}},
+
+	// --- Page info extras ---
+	"resource": {Group: "Page info", Usage: "rodney resource <url> [file|-]",
+		Desc:  "Print the cached body of an already-loaded resource (script, XHR response, image) — no new request. Substring URL match.",
+		Examples: []string{"rodney resource /api/users", "rodney resource app.js script.js"}},
+	"history": {Group: "Page info", Usage: "rodney history",
+		Desc: "Print the navigation history of the active page (* marks current).", Examples: []string{"rodney history"}},
 }
 
 // printCommandHelp renders the Tier-1 help block for one command.
@@ -820,6 +830,10 @@ func main() {
 		cmdWaitNav(args)
 	case "headers":
 		cmdHeaders(args)
+	case "resource":
+		cmdResource(args)
+	case "history":
+		cmdHistory(args)
 	case "help", "-h", "--help":
 		// Tiered help: `help` = overview, `help <cmd>` = structured details,
 		// `help --json` = full machine-readable registry.
@@ -924,26 +938,27 @@ func withPage() (*State, *rod.Browser, *rod.Page) {
 // --- Commands ---
 
 // parseStartArgs parses the flags for the "start" command.
-// Returns ignoreCertErrors, headless, and an error for unknown flags.
-func parseStartArgs(args []string) (ignoreCertErrors bool, headless bool, err error) {
+// Returns ignoreCertErrors, headless, incognito, and an error for unknown flags.
+func parseStartArgs(args []string) (ignoreCertErrors bool, headless bool, incognito bool, err error) {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&ignoreCertErrors, "insecure", false, "")
 	fs.BoolVar(&ignoreCertErrors, "k", false, "")
 	show := fs.Bool("show", false, "")
+	incognitoFlag := fs.Bool("incognito", false, "")
 
 	if parseErr := fs.Parse(args); parseErr != nil {
-		return false, true, fmt.Errorf("unknown flag: %s\nusage: rodney start [--show] [--insecure]", findUnknownFlag(args, fs))
+		return false, true, false, fmt.Errorf("unknown flag: %s\nusage: rodney start [--show] [--insecure] [--incognito]", findUnknownFlag(args, fs))
 	}
 	if fs.NArg() > 0 {
-		return false, true, fmt.Errorf("unknown flag: %s\nusage: rodney start [--show] [--insecure]", fs.Arg(0))
+		return false, true, false, fmt.Errorf("unknown flag: %s\nusage: rodney start [--show] [--insecure] [--incognito]", fs.Arg(0))
 	}
 	headless = !*show
-	return ignoreCertErrors, headless, nil
+	return ignoreCertErrors, headless, *incognitoFlag, nil
 }
 
 func cmdStart(args []string) {
-	ignoreCertErrors, headless, err := parseStartArgs(args)
+	ignoreCertErrors, headless, incognito, err := parseStartArgs(args)
 	if err != nil {
 		fatal("%s", err)
 	}
@@ -959,6 +974,14 @@ func cmdStart(args []string) {
 	}
 
 	dataDir := filepath.Join(stateDir(), "chrome-data")
+	if incognito {
+		// Throwaway profile: temp dir, removed on `rodney stop`.
+		tmp, err := os.MkdirTemp("", "rodney-incognito-*")
+		if err != nil {
+			fatal("failed to create incognito profile dir: %v", err)
+		}
+		dataDir = tmp
+	}
 	os.MkdirAll(dataDir, 0755)
 
 	l := launcher.New().
@@ -1028,6 +1051,7 @@ func cmdStart(args []string) {
 		DataDir:    dataDir,
 		ProxyPID:   proxyPID,
 		ProxyPort:  proxyPort,
+		Incognito:  incognito,
 	}
 
 	if err := saveState(state); err != nil {
@@ -1121,6 +1145,17 @@ func cmdStop(args []string) {
 	// Clean up any active video recording
 	if s.VideoRecording && s.VideoDir != "" {
 		os.RemoveAll(s.VideoDir)
+	}
+	// Incognito sessions use a throwaway profile — remove it. Chrome may
+	// still flush profile files during shutdown, so retry briefly.
+	if s.Incognito && s.DataDir != "" {
+		for i := 0; i < 20; i++ {
+			if err := os.RemoveAll(s.DataDir); err == nil {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		os.RemoveAll(s.DataDir)
 	}
 	removeState()
 	fmt.Println("Chrome stopped")
@@ -1304,7 +1339,7 @@ func cmdTitle(args []string) {
 func cmdHTML(args []string) {
 	_, _, page := withPage()
 	if len(args) > 0 {
-		el, err := page.Element(args[0])
+		el, err := pageEl(page, args[0])
 		if err != nil {
 			fatal("element not found: %v", err)
 		}
@@ -1324,7 +1359,7 @@ func cmdText(args []string) {
 		fatal("usage: rodney text <selector>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1340,7 +1375,7 @@ func cmdAttr(args []string) {
 		fatal("usage: rodney attr <selector> <attribute>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1413,12 +1448,29 @@ func cmdJS(args []string) {
 	}
 }
 
+// pageEl finds an element by CSS selector, or by XPath when the selector
+// starts with "//" or "(" (the usual XPath conventions).
+func pageEl(page *rod.Page, sel string) (*rod.Element, error) {
+	if strings.HasPrefix(sel, "//") || strings.HasPrefix(sel, "(") {
+		return page.ElementX(sel)
+	}
+	return page.Element(sel)
+}
+
+// pageEls is the plural variant of pageEl (XPath-aware).
+func pageEls(page *rod.Page, sel string) (rod.Elements, error) {
+	if strings.HasPrefix(sel, "//") || strings.HasPrefix(sel, "(") {
+		return page.ElementsX(sel)
+	}
+	return page.Elements(sel)
+}
+
 func cmdClick(args []string) {
 	if len(args) < 1 {
 		fatal("usage: rodney click <selector>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1435,7 +1487,7 @@ func cmdInput(args []string) {
 		fatal("usage: rodney input <selector> <text>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1449,7 +1501,7 @@ func cmdClear(args []string) {
 		fatal("usage: rodney clear <selector>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1783,7 +1835,7 @@ func cmdSubmit(args []string) {
 		fatal("usage: rodney submit <selector>")
 	}
 	_, _, page := withPage()
-	_, err := page.Element(args[0])
+	_, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("form not found: %v", err)
 	}
@@ -1796,7 +1848,7 @@ func cmdHover(args []string) {
 		fatal("usage: rodney hover <selector>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1809,7 +1861,7 @@ func cmdFocus(args []string) {
 		fatal("usage: rodney focus <selector>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1945,7 +1997,7 @@ func cmdScrollEl(args []string) {
 		fatal("usage: rodney scroll-el <selector>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1970,7 +2022,7 @@ func cmdWait(args []string) {
 		fatal("usage: rodney wait <selector> | rodney wait --url <substring>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -2092,7 +2144,7 @@ func cmdScreenshotEl(args []string) {
 		file = args[1]
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -2158,10 +2210,12 @@ func stopVideo(outputFile string) (*VideoResult, error) {
 	// Assemble output if we have frames
 	if frameCount > 0 && outputFile != "" {
 		if strings.HasSuffix(strings.ToLower(outputFile), ".gif") {
-			if gifResult, err := assembleGIF(framesDir, outputFile); err == nil {
-				result.OutputFile = gifResult.OutputFile
-				result.UniqueFrames = gifResult.UniqueFrames
+			gifResult, err := assembleGIF(framesDir, outputFile)
+			if err != nil {
+				return nil, fmt.Errorf("GIF assembly failed: %w", err)
 			}
+			result.OutputFile = gifResult.OutputFile
+			result.UniqueFrames = gifResult.UniqueFrames
 		} else {
 			assembled, err := assembleVideo(framesDir, outputFile)
 			if err == nil {
@@ -2752,7 +2806,15 @@ func cmdExists(args []string) {
 		fatal("usage: rodney exists <selector>")
 	}
 	_, _, page := withPage()
-	has, _, err := page.Has(args[0])
+	var has bool
+	var err error
+	if strings.HasPrefix(args[0], "//") || strings.HasPrefix(args[0], "(") {
+		els, e := pageEls(page, args[0])
+		err = e
+		has = len(els) > 0
+	} else {
+		has, _, err = page.Has(args[0])
+	}
 	if err != nil {
 		fatal("query failed: %v", err)
 	}
@@ -2770,7 +2832,7 @@ func cmdCount(args []string) {
 		fatal("usage: rodney count <selector>")
 	}
 	_, _, page := withPage()
-	els, err := page.Elements(args[0])
+	els, err := pageEls(page, args[0])
 	if err != nil {
 		fatal("query failed: %v", err)
 	}
@@ -2782,7 +2844,7 @@ func cmdVisible(args []string) {
 		fatal("usage: rodney visible <selector>")
 	}
 	_, _, page := withPage()
-	el, err := page.Element(args[0])
+	el, err := pageEl(page, args[0])
 	if err != nil {
 		fmt.Println("false")
 		os.Exit(1)
@@ -4970,4 +5032,69 @@ func cmdHeaders(args []string) {
 		fatal("failed to save state: %v", err)
 	}
 	fmt.Printf("Headers set (%d total — applied to every request from now on)\n", len(s.Headers))
+}
+
+// cmdResource prints the cached response body of an already-loaded resource.
+// Exact URL match first, then substring match against the resource tree.
+func cmdResource(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney resource <url> [file|-]")
+	}
+	_, _, page := withPage()
+	url := args[0]
+
+	data, err := page.GetResource(url)
+	if err != nil {
+		// Substring match against all loaded resources
+		tree, terr := proto.PageGetResourceTree{}.Call(page)
+		if terr == nil {
+			var walk func(ft *proto.PageFrameResourceTree) bool
+			walk = func(ft *proto.PageFrameResourceTree) bool {
+				for _, r := range ft.Resources {
+					if strings.Contains(r.URL, url) {
+						data, err = page.GetResource(r.URL)
+						return true
+					}
+				}
+				for _, c := range ft.ChildFrames {
+					if walk(c) {
+						return true
+					}
+				}
+				return false
+			}
+			walk(tree.FrameTree)
+		}
+		if err != nil {
+			fatal("resource not loaded (open the page first): %v", err)
+		}
+	}
+
+	out := "-"
+	if len(args) > 1 {
+		out = args[1]
+	}
+	if out == "-" {
+		os.Stdout.Write(data)
+	} else if err := os.WriteFile(out, data, 0644); err != nil {
+		fatal("failed to write file: %v", err)
+	} else {
+		fmt.Printf("Saved %d bytes to %s\n", len(data), out)
+	}
+}
+
+// cmdHistory prints the navigation history of the active page.
+func cmdHistory(args []string) {
+	_, _, page := withPage()
+	h, err := proto.PageGetNavigationHistory{}.Call(page)
+	if err != nil {
+		fatal("failed to get history: %v", err)
+	}
+	for i, e := range h.Entries {
+		marker := " "
+		if i == h.CurrentIndex {
+			marker = "*"
+		}
+		fmt.Printf("%s [%d] %s\n", marker, i, e.URL)
+	}
 }

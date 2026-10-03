@@ -231,6 +231,21 @@ The `pattern` is a glob-style URL pattern (e.g. `*api.example.com/users*`). `--m
 
 This builds on rod's [request hijacking](https://github.com/go-rod/rod) (`Fetch` CDP domain). Use it to test error states, offline behaviour, or to stub third-party APIs in CI.
 
+### XPath, cached resources, history, incognito
+
+```bash
+rodney click "//button[@id='submit']"   # Selectors starting with // or ( are XPath
+rodney text "//div[@class='row'][2]/span"
+rodney count "//a[contains(@href,'api')]"
+
+rodney resource "/api/users"            # Cached body of a loaded resource (no new request)
+rodney resource app.js script.js        # Save instead of print
+
+rodney history                          # Navigation history, * marks current entry
+
+rodney start --incognito                # Throwaway profile — fully deleted on rodney stop
+```
+
 ### Viewport, device emulation, extra headers
 
 ```bash
