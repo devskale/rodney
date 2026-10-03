@@ -38,6 +38,29 @@ Requires:
 
 ## Usage
 
+### Progressive help (agent-friendly)
+
+Rodney's help is progressive — discover what you need layer by layer:
+
+```bash
+rodney --help              # Tier 0: compact overview, all commands grouped
+rodney help <command>     # Tier 1: description, usage, flags, examples
+rodney <command> --help   # same as above
+rodney help --json        # Tier 2: full command registry as JSON
+```
+
+Unknown commands get a "did you mean" suggestion instead of a wall of help:
+
+```
+$ rodney pgae
+unknown command: pgae
+did you mean: page?
+```
+
+The JSON registry (`rodney help --json`) enumerates every command with group,
+usage, description, flags, and examples — one call, machine-readable, for
+scripts and agents that need to know what rodney can do.
+
 ### Start/stop the browser
 
 ```bash

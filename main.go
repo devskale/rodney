@@ -207,7 +207,7 @@ var commandUsage = map[string]string{
 	"connect":       "rodney connect <host:port>",
 	"stop":          "rodney stop",
 	"status":        "rodney status",
-	"open":          "rodney open <url>",
+	"open":          "rodney open <url> [--reuse]",
 	"back":          "rodney back",
 	"forward":       "rodney forward",
 	"reload":        "rodney reload [--hard]",
@@ -216,7 +216,7 @@ var commandUsage = map[string]string{
 	"title":         "rodney title",
 	"html":          "rodney html [selector]",
 	"text":          "rodney text <selector>",
-	"attr":          "rodney attr <selector> <attribute>",
+	"attr":          "rodney attr <selector> <name>",
 	"pdf":           "rodney pdf [file]",
 	"js":            "rodney js <expression>",
 	"click":         "rodney click <selector>",
@@ -248,8 +248,8 @@ var commandUsage = map[string]string{
 	"exists":        "rodney exists <selector>",
 	"count":         "rodney count <selector>",
 	"visible":       "rodney visible <selector>",
-	"assert":        "rodney assert <js-expression> [expected] [--message msg]",
-	"ua":            "rodney ua <user-agent-string>",
+	"assert":        "rodney assert <js-expression> [expected] [-m msg]",
+	"ua":            "rodney ua <user-agent>",
 	"timezone":      "rodney timezone <timezone-id>",
 	"locale":        "rodney locale <locale>",
 	"geo":           "rodney geo --lat <lat> --lon <lon>",
@@ -257,15 +257,295 @@ var commandUsage = map[string]string{
 	"ax-tree":       "rodney ax-tree [--depth N] [--json]",
 	"ax-find":       "rodney ax-find [--name N] [--role R] [--json]",
 	"ax-node":       "rodney ax-node <selector> [--json]",
-	"cookie-set":    "rodney cookie-set <name> <value> [opts]",
+	"cookie-set":    "rodney cookie-set <name> <value> [--domain d] [--url u] [--path p] [--expires t] [--http-only] [--secure]",
 	"cookie-get":    "rodney cookie-get [name] [--json]",
-	"cookie-delete": "rodney cookie-delete <name> [opts]",
+	"cookie-delete": "rodney cookie-delete <name> [--domain d] [--url u] [--path p]",
 	"cookie-clear":  "rodney cookie-clear [--domain <domain>]",
 	"mock":          "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
 	"block":         "rodney block <pattern> [--method M]",
 	"console":       "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
 	"console-start": "rodney console-start",
 	"console-stop":  "rodney console-stop",
+}
+
+// cmdHelpEntry is the structured help for one command (Tier 1/2 of the help
+// system: `rodney help <cmd>`, `rodney <cmd> --help`, `rodney help --json`).
+type cmdHelpEntry struct {
+	Group    string   `json:"group"`
+	Usage    string   `json:"usage"`
+	Desc     string   `json:"description"`
+	Flags    []string `json:"flags,omitempty"`
+	Examples []string `json:"examples,omitempty"`
+}
+
+// commandHelp holds the per-command help registry. Usage lines mirror
+// commandUsage; Desc/Flags/Examples power progressive discovery for agents.
+var commandHelp = map[string]cmdHelpEntry{
+	// --- Browser lifecycle ---
+	"start": {Group: "Browser lifecycle", Usage: "rodney start [--show] [--insecure|-k] [--local]",
+		Desc:  "Launch Chrome (headless by default) and save the connection state. Other rodney commands reuse this browser.",
+		Flags: []string{"--show      launch visible Chrome instead of headless", "--insecure, -k   ignore certificate errors", "--local    directory-scoped session (./.rodney/)"},
+		Examples: []string{"rodney start", "rodney start --show --insecure"}},
+	"connect": {Group: "Browser lifecycle", Usage: "rodney connect <host:port>",
+		Desc:  "Attach to an already-running Chrome's remote debug port instead of launching one.",
+		Examples: []string{"rodney connect 127.0.0.1:9222"}},
+	"stop": {Group: "Browser lifecycle", Usage: "rodney stop",
+		Desc: "Shut down Chrome, the auth proxy, the console collector; clear session state.", Examples: []string{"rodney stop"}},
+	"status": {Group: "Browser lifecycle", Usage: "rodney status",
+		Desc: "Show browser status: running, debug URL, active page, current URL.", Examples: []string{"rodney status"}},
+
+	// --- Navigation ---
+	"open": {Group: "Navigation", Usage: "rodney open <url> [--reuse]",
+		Desc:  "Navigate the active page to a URL. http:// is added if no scheme is given.",
+		Flags: []string{"--reuse    switch to an existing page already at that URL instead of navigating the active page away"},
+		Examples: []string{"rodney open https://example.com", "rodney open https://example.com --reuse"}},
+	"back":       {Group: "Navigation", Usage: "rodney back", Desc: "Go back one step in history.", Examples: []string{"rodney back"}},
+	"forward":    {Group: "Navigation", Usage: "rodney forward", Desc: "Go forward one step in history.", Examples: []string{"rodney forward"}},
+	"reload": {Group: "Navigation", Usage: "rodney reload [--hard]",
+		Desc: "Reload the page.", Flags: []string{"--hard   bypass the cache"}, Examples: []string{"rodney reload --hard"}},
+	"clear-cache": {Group: "Navigation", Usage: "rodney clear-cache", Desc: "Clear the browser cache.", Examples: []string{"rodney clear-cache"}},
+
+	// --- Page info ---
+	"url":   {Group: "Page info", Usage: "rodney url", Desc: "Print the current URL.", Examples: []string{"rodney url"}},
+	"title": {Group: "Page info", Usage: "rodney title", Desc: "Print the page title.", Examples: []string{"rodney title"}},
+	"html": {Group: "Page info", Usage: "rodney html [selector]",
+		Desc:  "Print HTML of the page or of one element (pretty-printed).",
+		Examples: []string{"rodney html", "rodney html \"#main\""}},
+	"text": {Group: "Page info", Usage: "rodney text <selector>",
+		Desc:  "Print the text content of an element.", Examples: []string{"rodney text \"h1\""}},
+	"attr": {Group: "Page info", Usage: "rodney attr <selector> <name>",
+		Desc:  "Print an attribute value of an element.", Examples: []string{"rodney attr \"a.link\" href"}},
+	"pdf": {Group: "Page info", Usage: "rodney pdf [file]",
+		Desc:  "Save the page as PDF (default: <title>.pdf).", Examples: []string{"rodney pdf out.pdf"}},
+
+	// --- Interaction ---
+	"js": {Group: "Interaction", Usage: "rodney js <expression>",
+		Desc:  "Evaluate a JavaScript expression on the active page. Bare expressions are auto-wrapped; statements like console.log work via the wrapper.",
+		Examples: []string{"rodney js \"document.title\"", "rodney js \"1 + 1\""}},
+	"click": {Group: "Interaction", Usage: "rodney click <selector>",
+		Desc:  "Click an element (waits for it to appear).", Examples: []string{"rodney click \"button#submit\""}},
+	"input": {Group: "Interaction", Usage: "rodney input <selector> <text>",
+		Desc:  "Type text into an input field by setting .value (fast, but fires no key events — use 'type' or 'press' if the page reacts to keyboard input).",
+		Examples: []string{"rodney input \"#search\" \"query\""}},
+	"type": {Group: "Interaction", Usage: "rodney type <text>",
+		Desc:  "Type text into the focused element as real keyboard input — fires key and input events (SPA validation, autocomplete react to it).",
+		Examples: []string{"rodney focus \"#search\" && rodney type \"query\""}},
+	"press": {Group: "Interaction", Usage: "rodney press <key> [key ...]",
+		Desc:  "Press keys as real keyboard events. Combos use +; multiple args press in sequence.",
+		Flags: []string{"keys: enter, tab, escape, backspace, delete, space, up, down, left, right, home, end, pageup, pagedown, shift, ctrl, alt, meta, or a single character"},
+		Examples: []string{"rodney press enter", "rodney press ctrl+a", "rodney press shift tab"}},
+	"clear": {Group: "Interaction", Usage: "rodney clear <selector>",
+		Desc:  "Clear an input field.", Examples: []string{"rodney clear \"#search\""}},
+	"file": {Group: "Interaction", Usage: "rodney file <selector> <path|->",
+		Desc:  "Set a file on a file input element. '-' reads the content from stdin.",
+		Examples: []string{"rodney file \"#upload\" photo.png", "cat data.csv | rodney file \"#upload\" -"}},
+	"download": {Group: "Interaction", Usage: "rodney download <selector> [file|-]",
+		Desc:  "Download the href/src target of an element. '-' streams to stdout.",
+		Examples: []string{"rodney download \"a.pdf\"", "rodney download \"img.logo\" -"}},
+	"select": {Group: "Interaction", Usage: "rodney select <selector> <value>",
+		Desc:  "Select a dropdown option by value.", Examples: []string{"rodney select \"#topic\" \"support\""}},
+	"submit": {Group: "Interaction", Usage: "rodney submit <selector>",
+		Desc:  "Submit a form.", Examples: []string{"rodney submit \"form#login\""}},
+	"hover": {Group: "Interaction", Usage: "rodney hover <selector>",
+		Desc:  "Hover over an element (triggers mouseenter/mouseover).", Examples: []string{"rodney hover \".menu-item\""}},
+	"focus": {Group: "Interaction", Usage: "rodney focus <selector>",
+		Desc:  "Focus an element (use before 'type' or 'press').", Examples: []string{"rodney focus \"#email\""}},
+	"scroll": {Group: "Interaction", Usage: "rodney scroll <x> <y> [--steps N]",
+		Desc:  "Scroll the page by x/y pixels (relative; negative y scrolls up).",
+		Flags: []string{"--steps N   scroll in N increments (smooth scroll, lazy-loading)"},
+		Examples: []string{"rodney scroll 0 600", "rodney scroll 0 1000 --steps 10"}},
+	"scroll-el": {Group: "Interaction", Usage: "rodney scroll-el <selector>",
+		Desc:  "Scroll an element into view.", Examples: []string{"rodney scroll-el \"#footer\""}},
+
+	// --- Waiting ---
+	"wait": {Group: "Waiting", Usage: "rodney wait <selector>",
+		Desc: "Wait until an element appears (default timeout 30s, ROD_TIMEOUT to change).", Examples: []string{"rodney wait \".results\""}},
+	"waitload":   {Group: "Waiting", Usage: "rodney waitload", Desc: "Wait for the page load event.", Examples: []string{"rodney waitload"}},
+	"waitstable": {Group: "Waiting", Usage: "rodney waitstable", Desc: "Wait until the DOM stops changing.", Examples: []string{"rodney waitstable"}},
+	"waitidle":   {Group: "Waiting", Usage: "rodney waitidle", Desc: "Wait until the network is idle.", Examples: []string{"rodney waitidle"}},
+	"sleep":      {Group: "Waiting", Usage: "rodney sleep <seconds>", Desc: "Sleep for N seconds.", Examples: []string{"rodney sleep 2"}},
+
+	// --- Screenshots ---
+	"screenshot": {Group: "Screenshots", Usage: "rodney screenshot [-w N] [-h N] [file]",
+		Desc:  "Take a PNG screenshot of the page (default: screenshot.png; '-' for stdout).",
+		Flags: []string{"-w N   viewport width", "-h N   viewport height"},
+		Examples: []string{"rodney screenshot", "rodney screenshot -w 1280 -h 800 out.png"}},
+	"screenshot-el": {Group: "Screenshots", Usage: "rodney screenshot-el <selector> [file]",
+		Desc: "Screenshot a single element.", Examples: []string{"rodney screenshot-el \"#chart\""}},
+
+	// --- Video recording ---
+	"start-video": {Group: "Video recording", Usage: "rodney start-video",
+		Desc: "Start recording the page as video frames (saved on stop-video).", Examples: []string{"rodney start-video"}},
+	"stop-video": {Group: "Video recording", Usage: "rodney stop-video [file]",
+		Desc: "Stop recording and save. .gif by default; .mp4 requires ffmpeg in PATH.", Examples: []string{"rodney stop-video demo.gif"}},
+
+	// --- Tabs ---
+	"pages": {Group: "Tabs", Usage: "rodney pages [--json]",
+		Desc:  "List all pages/tabs. * marks the active one.",
+		Flags: []string{"--json   machine-readable: index, target, title, url, active"},
+		Examples: []string{"rodney pages", "rodney pages --json"}},
+	"page": {Group: "Tabs", Usage: "rodney page <index|t:targetID>",
+		Desc:  "Switch the active page. t:<id> pins by stable target ID — drift-proof when parallel sessions shift indices.",
+		Examples: []string{"rodney page 1", "rodney page t:ABC123"}},
+	"newpage":   {Group: "Tabs", Usage: "rodney newpage [url]", Desc: "Open a new page/tab and make it active.", Examples: []string{"rodney newpage https://example.com"}},
+	"closepage": {Group: "Tabs", Usage: "rodney closepage [index|t:targetID]",
+		Desc:  "Close a page (default: the active one). t:<id> is drift-proof; the active index is adjusted automatically.",
+		Examples: []string{"rodney closepage", "rodney closepage t:ABC123"}},
+
+	// --- Element checks ---
+	"exists": {Group: "Element checks", Usage: "rodney exists <selector>",
+		Desc: "Check if an element exists. Exit 0 if yes, exit 1 if not.", Examples: []string{"rodney exists \".error\""}},
+	"count":  {Group: "Element checks", Usage: "rodney count <selector>", Desc: "Count matching elements.", Examples: []string{"rodney count \"li.item\""}},
+	"visible": {Group: "Element checks", Usage: "rodney visible <selector>",
+		Desc: "Check if an element is visible. Exit 0/1.", Examples: []string{"rodney visible \"#modal\""}},
+	"assert": {Group: "Element checks", Usage: "rodney assert <js-expression> [expected] [-m msg]",
+		Desc:  "Assert a JS expression is truthy (or equals 'expected'). Exit 1 on failure.",
+		Flags: []string{"-m, --message msg   custom failure message"},
+		Examples: []string{"rodney assert \"document.title\" \"Dashboard\"", "rodney assert \"document.querySelectorAll('.row').length\" 5"}},
+
+	// --- Cookies ---
+	"cookie-set": {Group: "Cookies", Usage: "rodney cookie-set <name> <value> [--domain d] [--url u] [--path p] [--expires t] [--http-only] [--secure]",
+		Desc:  "Set a cookie. Defaults to the current page's URL/domain.",
+		Examples: []string{"rodney cookie-set session abc123"}},
+	"cookie-get": {Group: "Cookies", Usage: "rodney cookie-get [name] [--json]",
+		Desc:  "Get cookies: one value by name, or all cookies (--json for structured output).",
+		Examples: []string{"rodney cookie-get", "rodney cookie-get session --json"}},
+	"cookie-delete": {Group: "Cookies", Usage: "rodney cookie-delete <name> [--domain d] [--url u] [--path p]",
+		Desc: "Delete cookies by name (scoped by domain/url/path if given).", Examples: []string{"rodney cookie-delete session"}},
+	"cookie-clear": {Group: "Cookies", Usage: "rodney cookie-clear [--domain <domain>]",
+		Desc: "Clear all cookies, or only those of one domain.", Examples: []string{"rodney cookie-clear --domain example.com"}},
+
+	// --- Emulation ---
+	"ua": {Group: "Emulation", Usage: "rodney ua <user-agent>",
+		Desc: "Override the browser user agent string.", Examples: []string{"rodney ua \"Mozilla/5.0 (iPhone)\""}},
+	"timezone": {Group: "Emulation", Usage: "rodney timezone <timezone-id>",
+		Desc: "Override the timezone (what Date/timezone APIs report).", Examples: []string{"rodney timezone Asia/Tokyo"}},
+	"locale": {Group: "Emulation", Usage: "rodney locale <locale>",
+		Desc: "Override the locale (what Intl APIs report).", Examples: []string{"rodney locale de-DE"}},
+	"geo": {Group: "Emulation", Usage: "rodney geo --lat <lat> --lon <lon>",
+		Desc: "Spoof geolocation coordinates.", Examples: []string{"rodney geo --lat 52.52 --lon 13.40"}},
+	"media": {Group: "Emulation", Usage: "rodney media [--type T] [--feature name=value ...]",
+		Desc: "Emulate media type or features (e.g. prefers-color-scheme).",
+		Examples: []string{"rodney media --type print", "rodney media --feature prefers-color-scheme=dark"}},
+
+	// --- Network interception ---
+	"mock": {Group: "Network interception", Usage: "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
+		Desc:  "Serve a canned response for matching requests. Runs as a persistent foreground process — Ctrl+C to stop.",
+		Flags: []string{"--status N    HTTP status (default 200)", "--type MIME   content type (default text/plain)", "--method M    restrict to HTTP method", "response '-' reads body from stdin"},
+		Examples: []string{"rodney mock '*api/users*' '{\"id\":1}' --type application/json"}},
+	"block": {Group: "Network interception", Usage: "rodney block <pattern> [--method M]",
+		Desc:  "Fail matching requests client-side (offline behaviour). Persistent foreground process.",
+		Examples: []string{"rodney block '*.ads.*'"}},
+
+	// --- Console ---
+	"console": {Group: "Console", Usage: "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
+		Desc:  "Read console output. Without a background collector: live stream (Ctrl+C). With collector (console-start): print buffered messages.",
+		Flags: []string{"--level L    filter: log, info, warn, error, debug", "--json       JSON lines output", "--browser    also browser-level log entries (network errors, security)", "--follow     print buffered, then tail live", "--clear      print and empty the buffer"},
+		Examples: []string{"rodney console --level error", "rodney console --json | jq 'select(.type==\"error\")'"}},
+	"console-start": {Group: "Console", Usage: "rodney console-start",
+		Desc: "Start the background console collector — captures console/browser logs between commands into console.jsonl.", Examples: []string{"rodney console-start"}},
+	"console-stop": {Group: "Console", Usage: "rodney console-stop",
+		Desc: "Stop the collector and remove the buffer.", Examples: []string{"rodney console-stop"}},
+
+	// --- Accessibility ---
+	"ax-tree": {Group: "Accessibility", Usage: "rodney ax-tree [--depth N] [--json]",
+		Desc:  "Dump the accessibility tree (roles, names, states).",
+		Flags: []string{"--depth N   limit tree depth", "--json      structured output"},
+		Examples: []string{"rodney ax-tree --depth 3"}},
+	"ax-find": {Group: "Accessibility", Usage: "rodney ax-find [--name N] [--role R] [--json]",
+		Desc:  "Find accessible nodes by name/role. Exit 1 if no match.",
+		Examples: []string{"rodney ax-find --role button --name Checkout"}},
+	"ax-node": {Group: "Accessibility", Usage: "rodney ax-node <selector> [--json]",
+		Desc: "Show accessibility info for one element.", Examples: []string{"rodney ax-node \"#submit\""}},
+}
+
+// printCommandHelp renders the Tier-1 help block for one command.
+func printCommandHelp(name string) {
+	e, ok := commandHelp[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "no detailed help for %s\n", name)
+		os.Exit(2)
+	}
+	fmt.Printf("%s — %s\n\n", name, e.Desc)
+	fmt.Printf("Usage: %s\n", e.Usage)
+	if len(e.Flags) > 0 {
+		fmt.Printf("\nFlags:\n")
+		for _, f := range e.Flags {
+			fmt.Printf("  %s\n", f)
+		}
+	}
+	if len(e.Examples) > 0 {
+		fmt.Printf("\nExamples:\n")
+		for _, ex := range e.Examples {
+			fmt.Printf("  %s\n", ex)
+		}
+	}
+	fmt.Printf("\nGroup: %s\n", e.Group)
+}
+
+// printHelpRegistry prints the whole command registry as JSON (Tier 2).
+func printHelpRegistryJSON() {
+	b, err := json.MarshalIndent(commandHelp, "", "  ")
+	if err != nil {
+		fatal("failed to marshal registry: %v", err)
+	}
+	fmt.Println(string(b))
+}
+
+// levenshtein computes the edit distance between two strings (lowercased).
+func levenshtein(a, b string) int {
+	a, b = strings.ToLower(a), strings.ToLower(b)
+	ra, rb := []rune(a), []rune(b)
+	d := make([][]int, len(ra)+1)
+	for i := range d {
+		d[i] = make([]int, len(rb)+1)
+		d[i][0] = i
+	}
+	for j := 0; j <= len(rb); j++ {
+		d[0][j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		for j := 1; j <= len(rb); j++ {
+		cost := 1
+		if ra[i-1] == rb[j-1] {
+			cost = 0
+		}
+			min := d[i-1][j] + 1 // deletion
+			if v := d[i][j-1] + 1; v < min { // insertion
+				min = v
+			}
+			if v := d[i-1][j-1] + cost; v < min { // substitution
+				min = v
+			}
+			if i > 1 && j > 1 && ra[i-1] == rb[j-2] && ra[i-2] == rb[j-1] { // transposition
+				if v := d[i-2][j-2] + 1; v < min {
+					min = v
+				}
+			}
+			d[i][j] = min
+		}
+	}
+	return d[len(ra)][len(rb)]
+}
+
+// suggestCommand returns the closest known command name, or "" if nothing
+// is close. Prefix match always wins; otherwise Damerau-Levenshtein distance
+// must be 1 (substitution, insertion, deletion, or adjacent transposition).
+func suggestCommand(name string) string {
+	name = strings.ToLower(name)
+	best, bestDist := "", 99
+	for known := range commandUsage {
+		if strings.HasPrefix(known, name) {
+			return known // prefix match is a strong signal
+		}
+		if d := levenshtein(name, known); d < bestDist {
+			best, bestDist = known, d
+		}
+	}
+	if bestDist <= 1 {
+		return best
+	}
+	return ""
 }
 
 // containsHelpFlag reports whether args contains a --help request.
@@ -332,15 +612,14 @@ func main() {
 	}
 
 	// Per-command help: if the command is known and --help is present among
-	// its args (or the command itself is a help request), print that command's
-	// usage line instead of dispatching. This gives a uniform, friendly
-	// `rodney <cmd> --help` for every command, including flag-based ones that
-	// would otherwise choke on the flag parser. `-h` is intentionally NOT
-	// treated as help here because some commands (e.g. screenshot) use it as a
-	// flag alias.
-	if cmdUsage, known := commandUsage[cmd]; known {
+	// its args, print the structured Tier-1 help instead of dispatching. This
+	// gives a uniform `rodney <cmd> --help` for every command, including
+	// flag-based ones that would otherwise choke on the flag parser. `-h` is
+	// intentionally NOT treated as help here because some commands (e.g.
+	// screenshot) use it as a flag alias.
+	if _, known := commandHelp[cmd]; known {
 		if containsHelpFlag(args) {
-			fmt.Printf("Usage: %s\n", cmdUsage)
+			printCommandHelp(cmd)
 			os.Exit(0)
 		}
 	}
@@ -477,11 +756,32 @@ func main() {
 	case "console-stop":
 		cmdConsoleStop(args)
 	case "help", "-h", "--help":
+		// Tiered help: `help` = overview, `help <cmd>` = structured details,
+		// `help --json` = full machine-readable registry.
+		if len(args) > 0 {
+			if args[0] == "--json" {
+				printHelpRegistryJSON()
+				os.Exit(0)
+			}
+			if _, known := commandHelp[args[0]]; known {
+				printCommandHelp(args[0])
+				os.Exit(0)
+			}
+			fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+			if s := suggestCommand(args[0]); s != "" {
+				fmt.Fprintf(os.Stderr, "did you mean: %s?\n", s)
+			}
+			fmt.Fprintf(os.Stderr, "run 'rodney help --json' for the full registry\n")
+			os.Exit(2)
+		}
 		printUsage()
 		os.Exit(0)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
-		printUsage()
+		if s := suggestCommand(cmd); s != "" {
+			fmt.Fprintf(os.Stderr, "did you mean: %s?\n", s)
+		}
+		fmt.Fprintf(os.Stderr, "run 'rodney --help' for all commands, 'rodney help --json' for the machine-readable registry\n")
 		os.Exit(2)
 	}
 }

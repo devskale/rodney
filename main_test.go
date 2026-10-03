@@ -3306,3 +3306,75 @@ func TestScrollChangesScrollY(t *testing.T) {
 		t.Errorf("scrollY after -200 = %d, want 300", got)
 	}
 }
+
+// =====================
+// help system tests
+// =====================
+
+// TestLevenshtein checks Damerau-Levenshtein: transpositions count as 1.
+func TestLevenshtein(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want int
+	}{
+		{"same", "page", "page", 0},
+		{"transposition", "pgae", "page", 1},
+		{"substitution", "pbge", "page", 1},
+		{"insertion", "sreenshot", "screenshot", 1},
+		{"deletion", "screnshot", "screenshot", 1},
+		{"two edits", "pa", "page", 2},
+	}
+	for _, c := range cases {
+		if got := levenshtein(c.a, c.b); got != c.want {
+			t.Errorf("%s: levenshtein(%q,%q) = %d, want %d", c.name, c.a, c.b, got, c.want)
+		}
+	}
+	// case-insensitive
+	if got := levenshtein("PAGE", "page"); got != 0 {
+		t.Errorf("case-insensitive failed: %d", got)
+	}
+}
+
+// TestSuggestCommand checks did-you-mean: real typos match, junk doesn't.
+func TestSuggestCommand(t *testing.T) {
+	// Real typos should suggest
+	for typo, want := range map[string]string{
+		"pgae":       "page",
+		"sreenshot":  "screenshot",
+		"cookie-st":  "cookie-set", // prefix
+		"presss":     "press",
+	} {
+		if got := suggestCommand(typo); got != want {
+			t.Errorf("suggestCommand(%q) = %q, want %q", typo, got, want)
+		}
+	}
+	// Junk should not suggest (avoid misleading false positives)
+	for _, junk := range []string{"bogus", "xyz", "aaaa", "zzzz"} {
+		if got := suggestCommand(junk); got != "" {
+			t.Errorf("suggestCommand(%q) = %q, want empty", junk, got)
+		}
+	}
+}
+
+// TestCommandHelpRegistry checks registry/usage parity and that every
+// entry has the essentials (group, usage, description).
+func TestCommandHelpRegistry(t *testing.T) {
+	if len(commandUsage) != len(commandHelp) {
+		t.Errorf("registry drift: %d usage entries vs %d help entries", len(commandUsage), len(commandHelp))
+	}
+	for cmd, e := range commandHelp {
+		if e.Group == "" || e.Usage == "" || e.Desc == "" {
+			t.Errorf("commandHelp[%q] missing Group/Usage/Desc: %+v", cmd, e)
+		}
+		if u, ok := commandUsage[cmd]; !ok {
+			t.Errorf("commandHelp[%q] not in commandUsage", cmd)
+		} else if u != e.Usage {
+			t.Errorf("commandHelp[%q].Usage = %q, commandUsage = %q (drift)", cmd, e.Usage, u)
+		}
+	}
+	// Registry must marshal (help --json path)
+	if _, err := json.Marshal(commandHelp); err != nil {
+		t.Errorf("registry not marshalable: %v", err)
+	}
+}

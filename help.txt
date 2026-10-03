@@ -130,3 +130,8 @@ Exit codes:
   0  Success
   1  Check failed (exists, visible, assert, ax-find returned no match)
   2  Error (bad arguments, no browser, timeout, etc.)
+
+Progressive help:
+  rodney help <command>     Structured help for one command (description,
+                           usage, flags, examples) — same as <command> --help
+  rodney help --json       Full command registry as JSON (for scripts/agents)
