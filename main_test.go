@@ -651,7 +651,7 @@ func TestDownload_ImgSrc(t *testing.T) {
 // =====================
 
 func TestExtractScopeArgs_NoFlags(t *testing.T) {
-	mode, remaining := extractScopeArgs([]string{"open", "https://example.com"})
+	mode, _, remaining := extractScopeArgs([]string{"open", "https://example.com"})
 	if mode != scopeAuto {
 		t.Errorf("expected scopeAuto, got %v", mode)
 	}
@@ -661,7 +661,7 @@ func TestExtractScopeArgs_NoFlags(t *testing.T) {
 }
 
 func TestExtractScopeArgs_LocalFlag(t *testing.T) {
-	mode, remaining := extractScopeArgs([]string{"--local", "start"})
+	mode, _, remaining := extractScopeArgs([]string{"--local", "start"})
 	if mode != scopeLocal {
 		t.Errorf("expected scopeLocal, got %v", mode)
 	}
@@ -671,7 +671,7 @@ func TestExtractScopeArgs_LocalFlag(t *testing.T) {
 }
 
 func TestExtractScopeArgs_GlobalFlag(t *testing.T) {
-	mode, remaining := extractScopeArgs([]string{"--global", "open", "https://example.com"})
+	mode, _, remaining := extractScopeArgs([]string{"--global", "open", "https://example.com"})
 	if mode != scopeGlobal {
 		t.Errorf("expected scopeGlobal, got %v", mode)
 	}
@@ -681,7 +681,7 @@ func TestExtractScopeArgs_GlobalFlag(t *testing.T) {
 }
 
 func TestExtractScopeArgs_LocalFlagAfterCommand(t *testing.T) {
-	mode, remaining := extractScopeArgs([]string{"open", "--local", "https://example.com"})
+	mode, _, remaining := extractScopeArgs([]string{"open", "--local", "https://example.com"})
 	if mode != scopeLocal {
 		t.Errorf("expected scopeLocal, got %v", mode)
 	}
@@ -691,7 +691,7 @@ func TestExtractScopeArgs_LocalFlagAfterCommand(t *testing.T) {
 }
 
 func TestExtractScopeArgs_LastFlagWins(t *testing.T) {
-	mode, _ := extractScopeArgs([]string{"--local", "--global", "start"})
+	mode, _, _ := extractScopeArgs([]string{"--local", "--global", "start"})
 	if mode != scopeGlobal {
 		t.Errorf("expected last flag (scopeGlobal) to win, got %v", mode)
 	}
@@ -2814,6 +2814,62 @@ func TestCommandUsageMap(t *testing.T) {
 	for _, c := range commands {
 		if _, ok := commandUsage[c]; !ok {
 			t.Errorf("commandUsage missing entry for %q", c)
+		}
+	}
+}
+
+func TestExtractScopeArgs_SessionFlag(t *testing.T) {
+	mode, session, remaining := extractScopeArgs([]string{"--session", "job-a", "open", "https://example.com"})
+	if mode != scopeAuto {
+		t.Errorf("expected scopeAuto, got %v", mode)
+	}
+	if session != "job-a" {
+		t.Errorf("expected session 'job-a', got %q", session)
+	}
+	if len(remaining) != 2 || remaining[0] != "open" || remaining[1] != "https://example.com" {
+		t.Errorf("expected [open https://example.com], got %v", remaining)
+	}
+}
+
+func TestExtractScopeArgs_SessionAfterCommand(t *testing.T) {
+	_, session, remaining := extractScopeArgs([]string{"open", "--session", "b", "https://example.com"})
+	if session != "b" {
+		t.Errorf("expected session 'b', got %q", session)
+	}
+	if len(remaining) != 2 || remaining[0] != "open" {
+		t.Errorf("expected [open https://example.com], got %v", remaining)
+	}
+}
+
+func TestExtractScopeArgs_SessionNeedsValue(t *testing.T) {
+	// --session without a name prints an error and os.Exit(1)s inside
+	// extractScopeArgs — untestable here. The CLI contract is covered by the
+	// skill's test.sh (asserts nonzero exit). Nothing to assert in-process.
+	_ = t
+}
+
+func TestStateDir_SessionName(t *testing.T) {
+	sessionName = "test-sess"
+	defer func() { sessionName = "" }()
+	dir := stateDir()
+	home, _ := os.UserHomeDir()
+	expected := filepath.Join(home, ".rodney-sessions", "test-sess")
+	if dir != expected {
+		t.Errorf("expected %q, got %q", expected, dir)
+	}
+}
+
+func TestNormalizeURL(t *testing.T) {
+	cases := map[string]string{
+		"https://example.com/":  "https://example.com",
+		"https://example.com":    "https://example.com",
+		"https://example.com/a/": "https://example.com/a",
+		"/":                      "/",
+		"http://x/":              "http://x",
+	}
+	for in, want := range cases {
+		if got := normalizeURL(in); got != want {
+			t.Errorf("normalizeURL(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
