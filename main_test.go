@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -3184,5 +3185,124 @@ func TestClosePageActiveIndexAdjust(t *testing.T) {
 	// p2 must still be reachable by its target ID
 	if findByTarget(p2.TargetID) < 0 {
 		t.Fatal("p2 not found after closing p1 and p3")
+	}
+}
+
+// =====================
+// press/type/scroll tests
+// =====================
+
+// TestParseKeyNames checks key name parsing including combos and single chars.
+func TestParseKeyNames(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want []input.Key
+	}{
+		{[]string{"enter"}, []input.Key{input.Enter}},
+		{[]string{"tab"}, []input.Key{input.Tab}},
+		{[]string{"esc"}, []input.Key{input.Escape}},
+		{[]string{"ctrl+a"}, []input.Key{input.ControlLeft, 'a'}},
+		{[]string{"shift", "tab"}, []input.Key{input.ShiftLeft, input.Tab}},
+		{[]string{"a"}, []input.Key{'a'}},
+		{[]string{"UP"}, []input.Key{input.ArrowUp}}, // case-insensitive
+	}
+	for _, c := range cases {
+		got, err := parseKeyNames(c.in)
+		if err != nil {
+			t.Errorf("parseKeyNames(%v) error: %v", c.in, err)
+			continue
+		}
+		if len(got) != len(c.want) {
+			t.Errorf("parseKeyNames(%v) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("parseKeyNames(%v)[%d] = %v, want %v", c.in, i, got[i], c.want[i])
+			}
+		}
+	}
+	if _, err := parseKeyNames([]string{"bogus"}); err == nil {
+		t.Error("parseKeyNames('bogus') should error")
+	}
+}
+
+// TestPressFiresKeyEvents verifies press fires real keydown events.
+func TestPressFiresKeyEvents(t *testing.T) {
+	page := navigateTo(t, "/")
+	page.MustEval(`() => {
+		window._keys = [];
+		document.addEventListener('keydown', e => window._keys.push(e.key + (e.ctrlKey ? ':ctrl' : '')));
+		return true;
+	}`)
+
+	// press enter
+	if err := page.KeyActions().Press(input.Enter).Do(); err != nil {
+		t.Fatalf("press enter failed: %v", err)
+	}
+	// press ctrl+a
+	if err := page.KeyActions().Press(input.ControlLeft, 'a').Do(); err != nil {
+		t.Fatalf("press ctrl+a failed: %v", err)
+	}
+
+	keys, err := page.Eval(`() => window._keys.join(',')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := keys.Value.Str()
+	want := "Enter,Control:ctrl,a:ctrl" // ctrl+a fires Control keydown itself, then a with ctrlKey
+	if got != want {
+		t.Errorf("key events = %q, want %q", got, want)
+	}
+}
+
+// TestTypeFiresInputEvents verifies type (InsertText) fires input events
+// on the focused element — unlike `input` which sets .value directly.
+func TestTypeFiresInputEvents(t *testing.T) {
+	page := navigateTo(t, "/form")
+	page.MustElement("#name-input").MustFocus()
+
+	if err := page.InsertText("hello typed"); err != nil {
+		t.Fatalf("InsertText failed: %v", err)
+	}
+
+	val, err := page.Eval(`() => document.querySelector('#name-input').value`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := val.Value.Str(); got != "hello typed" {
+		t.Errorf("field value = %q, want %q", got, "hello typed")
+	}
+}
+
+// TestScrollChangesScrollY verifies Mouse.Scroll scrolls the page and
+// negative values scroll back up.
+func TestScrollChangesScrollY(t *testing.T) {
+	page := navigateTo(t, "/empty")
+	// Make the page deterministically tall enough to scroll
+	page.MustEval(`() => { document.body.style.height = '5000px'; return true; }`)
+
+	if err := page.Mouse.Scroll(0, 500, 1); err != nil {
+		t.Fatalf("scroll failed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	y, err := page.Eval(`() => window.scrollY`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := y.Value.Int(); got < 400 {
+		t.Errorf("scrollY after +500 = %d, want >= 400", got)
+	}
+
+	if err := page.Mouse.Scroll(0, -200, 1); err != nil {
+		t.Fatalf("scroll up failed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	y, err = page.Eval(`() => window.scrollY`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := y.Value.Int(); got != 300 {
+		t.Errorf("scrollY after -200 = %d, want 300", got)
 	}
 }

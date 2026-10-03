@@ -89,7 +89,11 @@ The expression is automatically wrapped in `() => { return (expr); }`.
 
 ```bash
 rodney click "button#submit"       # Click element
-rodney input "#search" "query"     # Type into input field
+rodney input "#search" "query"     # Type into input field (sets .value, no key events)
+rodney type "query"                # Type as REAL keyboard input into focused element
+rodney press enter                 # Press key (enter, tab, escape, ...)
+rodney press ctrl+a                # Key combo
+rodney press shift tab             # Multiple keys
 rodney clear "#search"             # Clear input field
 rodney file "#upload" photo.png    # Set file on a file input
 rodney file "#upload" -            # Set file from stdin
@@ -99,7 +103,12 @@ rodney select "#dropdown" "value"  # Select dropdown by value
 rodney submit "form#login"         # Submit a form
 rodney hover ".menu-item"          # Hover over element
 rodney focus "#email"              # Focus element
+rodney scroll 0 600                # Scroll page down 600px (negative = up)
+rodney scroll 0 600 --steps 10     # Smooth scroll in 10 steps (lazy loading)
+rodney scroll-el "#footer"         # Scroll element into view
 ```
+
+`input` sets the field's `.value` directly — fast, but no key events fire. Use `type` (after `focus`) or `press` when the page reacts to keyboard input (SPA validation, autocomplete, search-as-you-type).
 
 ### Wait for conditions
 

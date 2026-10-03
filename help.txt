@@ -27,6 +27,11 @@ Interaction:
   rodney js <expression>          Evaluate JavaScript expression
   rodney click <selector>         Click an element
   rodney input <selector> <text>  Type text into an input field
+                                    (sets .value directly, no key events)
+  rodney type <text>              Type text as real keyboard input into the
+                                    focused element (fires key/input events)
+  rodney press <key> [key ...]    Press keys as real keyboard events
+                                    (enter, tab, escape, ctrl+a, shift+tab ...)
   rodney clear <selector>         Clear an input field
   rodney file <selector> <path|-> Set file on a file input (- for stdin)
   rodney download <sel> [file|-]  Download href/src target (- for stdout)
@@ -34,6 +39,8 @@ Interaction:
   rodney submit <selector>        Submit a form
   rodney hover <selector>         Hover over an element
   rodney focus <selector>         Focus an element
+  rodney scroll <x> <y> [--steps N]  Scroll page by pixels (negative y = up)
+  rodney scroll-el <selector>     Scroll an element into view
 
 Waiting:
   rodney wait <selector>          Wait for element to appear

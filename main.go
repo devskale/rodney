@@ -30,6 +30,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -240,6 +241,10 @@ var commandUsage = map[string]string{
 	"page":          "rodney page <index|t:targetID>",
 	"newpage":       "rodney newpage [url]",
 	"closepage":     "rodney closepage [index|t:targetID]",
+	"press":         "rodney press <key> [key ...]",
+	"type":          "rodney type <text>",
+	"scroll":        "rodney scroll <x> <y> [--steps N]",
+	"scroll-el":     "rodney scroll-el <selector>",
 	"exists":        "rodney exists <selector>",
 	"count":         "rodney count <selector>",
 	"visible":       "rodney visible <selector>",
@@ -425,6 +430,14 @@ func main() {
 		cmdNewPage(args)
 	case "closepage":
 		cmdClosePage(args)
+	case "press":
+		cmdPress(args)
+	case "type":
+		cmdType(args)
+	case "scroll":
+		cmdScroll(args)
+	case "scroll-el":
+		cmdScrollEl(args)
 	case "exists":
 		cmdExists(args)
 	case "count":
@@ -1414,6 +1427,144 @@ func cmdFocus(args []string) {
 	}
 	el.MustFocus()
 	fmt.Println("Focused")
+}
+
+// keyNames maps friendly key names to rod input.Key constants.
+// Names are case-insensitive; unknown names are an error.
+func keyNames() map[string]input.Key {
+	return map[string]input.Key{
+		"enter": input.Enter, "return": input.Enter,
+		"tab": input.Tab,
+		"escape": input.Escape, "esc": input.Escape,
+		"backspace": input.Backspace,
+		"delete": input.Delete, "del": input.Delete,
+		"space": input.Space,
+		"up": input.ArrowUp, "down": input.ArrowDown,
+		"left": input.ArrowLeft, "right": input.ArrowRight,
+		"home": input.Home, "end": input.End,
+		"pageup": input.PageUp, "pagedown": input.PageDown,
+		"shift": input.ShiftLeft, "ctrl": input.ControlLeft, "control": input.ControlLeft,
+		"alt": input.AltLeft, "meta": input.MetaLeft, "cmd": input.MetaLeft,
+	}
+}
+
+// parseKeyNames converts key names (comma- or space-separated args) to input.Keys.
+// A single character like "a" maps to its key; "ctrl+enter" style combos are
+// expanded into press-all-then-release-all sequences by the caller.
+func parseKeyNames(names []string) ([]input.Key, error) {
+	var keys []input.Key
+	for _, name := range names {
+		for _, part := range strings.Split(name, "+") {
+			part = strings.TrimSpace(strings.ToLower(part))
+			if part == "" {
+				continue
+			}
+			if k, ok := keyNames()[part]; ok {
+				keys = append(keys, k)
+				continue
+			}
+			// Single character (letter, digit, punctuation) — Key is a rune,
+			// printable chars map directly
+			if len([]rune(part)) == 1 {
+				keys = append(keys, input.Key([]rune(part)[0]))
+				continue
+			}
+			return nil, fmt.Errorf("unknown key %q (try: enter, tab, escape, backspace, delete, space, up, down, left, right, or a single character)", part)
+		}
+	}
+	return keys, nil
+}
+
+// cmdPress presses keys as real keyboard events (keydown+keyup), e.g.// "rodney press enter", "rodney press ctrl+a", "rodney press shift tab".
+// Unlike `input`, this fires real key events — SPA listeners and form
+// validation react to it.
+func cmdPress(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney press <key> [key ...]  (e.g. enter, tab, ctrl+a)")
+	}
+	keys, err := parseKeyNames(args)
+	if err != nil {
+		fatal("%v", err)
+	}
+	_, _, page := withPage()
+	ka := page.KeyActions().Press(keys...)
+	if err := ka.Do(); err != nil {
+		fatal("key press failed: %v", err)
+	}
+	fmt.Printf("Pressed: %s\n", strings.Join(args, " "))
+}
+
+// cmdType types text as real keyboard input into the focused element via
+// Input.insertText — fires input events (unlike `input`, which sets .value
+// directly without events).
+func cmdType(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney type <text>")
+	}
+	text := strings.Join(args, " ")
+	_, _, page := withPage()
+	if err := page.InsertText(text); err != nil {
+		fatal("type failed: %v", err)
+	}
+	fmt.Printf("Typed: %s\n", text)
+}
+
+// cmdScroll scrolls the page by (x, y) pixels — negative y scrolls up.
+// --steps N scrolls in N increments (smooth scrolling for lazy-loading).
+func cmdScroll(args []string) {
+	var steps int
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--steps":
+			i++
+			if i >= len(args) {
+				fatal("--steps requires a value")
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				fatal("--steps must be a positive integer")
+			}
+			steps = n
+		default:
+			rest = append(rest, args[i])
+		}
+	}
+	if len(rest) != 2 {
+		fatal("usage: rodney scroll <x> <y> [--steps N]  (negative y scrolls up)")
+	}
+	x, err := strconv.ParseFloat(rest[0], 64)
+	if err != nil {
+		fatal("invalid x: %v", err)
+	}
+	y, err := strconv.ParseFloat(rest[1], 64)
+	if err != nil {
+		fatal("invalid y: %v", err)
+	}
+	if steps == 0 {
+		steps = 1
+	}
+	_, _, page := withPage()
+	if err := page.Mouse.Scroll(x, y, steps); err != nil {
+		fatal("scroll failed: %v", err)
+	}
+	fmt.Printf("Scrolled (%.0f, %.0f)\n", x, y)
+}
+
+// cmdScrollEl scrolls an element into view.
+func cmdScrollEl(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney scroll-el <selector>")
+	}
+	_, _, page := withPage()
+	el, err := page.Element(args[0])
+	if err != nil {
+		fatal("element not found: %v", err)
+	}
+	if err := el.ScrollIntoView(); err != nil {
+		fatal("scroll into view failed: %v", err)
+	}
+	fmt.Println("Scrolled element into view")
 }
 
 func cmdWait(args []string) {
