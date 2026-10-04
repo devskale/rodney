@@ -287,7 +287,7 @@ var commandUsage = map[string]string{
 	"headers":        "rodney headers [k=v ...] [--clear]",
 	"resource":       "rodney resource <url> [file|-]",
 	"history":        "rodney history",
-	"drag":           "rodney drag <src-selector> <dst-selector>",
+	"drag":           "rodney drag <source-selector> <target-selector>",
 	"onload":         "rodney onload <js> [--clear]",
 	"waitpage":       "rodney waitpage [seconds]",
 	"stopload":       "rodney stopload",
