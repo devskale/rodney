@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -108,24 +109,25 @@ func resolveStateDir(mode scopeMode, workingDir string) string {
 
 // State persisted between CLI invocations
 type State struct {
-	DebugURL       string `json:"debug_url"`
-	ChromePID      int    `json:"chrome_pid"`
-	ActivePage     int    `json:"active_page"` // index into pages list
-	DataDir        string `json:"data_dir"`
-	ProxyPID       int    `json:"proxy_pid,omitempty"`  // PID of auth proxy helper
-	ProxyPort      int    `json:"proxy_port,omitempty"` // local port of auth proxy
-	VideoRecording bool   `json:"video_recording,omitempty"`
-	VideoDir       string `json:"video_dir,omitempty"`
-	ConsolePID     int    `json:"console_pid,omitempty"` // PID of background console collector
-	ConsoleLog     string `json:"console_log,omitempty"` // path to console.jsonl buffer
-	RequestPID     int    `json:"request_pid,omitempty"` // PID of background request collector
-	RequestLog     string `json:"request_log,omitempty"` // path to requests.jsonl buffer
-	Headers        map[string]string `json:"headers,omitempty"` // extra HTTP headers applied to every request
-	ViewportW      int    `json:"viewport_w,omitempty"`  // persisted viewport (0 = default)
-	ViewportH      int    `json:"viewport_h,omitempty"`
-	DeviceName     string `json:"device_name,omitempty"` // persisted device emulation preset
-	DeviceLandscape bool  `json:"device_landscape,omitempty"`
-	Incognito      bool  `json:"incognito,omitempty"` // throwaway profile, removed on stop
+	DebugURL        string            `json:"debug_url"`
+	ChromePID       int               `json:"chrome_pid"`
+	ActivePage      int               `json:"active_page"` // index into pages list
+	DataDir         string            `json:"data_dir"`
+	ProxyPID        int               `json:"proxy_pid,omitempty"`  // PID of auth proxy helper
+	ProxyPort       int               `json:"proxy_port,omitempty"` // local port of auth proxy
+	VideoRecording  bool              `json:"video_recording,omitempty"`
+	VideoDir        string            `json:"video_dir,omitempty"`
+	ConsolePID      int               `json:"console_pid,omitempty"` // PID of background console collector
+	ConsoleLog      string            `json:"console_log,omitempty"` // path to console.jsonl buffer
+	RequestPID      int               `json:"request_pid,omitempty"` // PID of background request collector
+	RequestLog      string            `json:"request_log,omitempty"` // path to requests.jsonl buffer
+	Headers         map[string]string `json:"headers,omitempty"`     // extra HTTP headers applied to every request
+	ViewportW       int               `json:"viewport_w,omitempty"`  // persisted viewport (0 = default)
+	ViewportH       int               `json:"viewport_h,omitempty"`
+	DeviceName      string            `json:"device_name,omitempty"` // persisted device emulation preset
+	DeviceLandscape bool              `json:"device_landscape,omitempty"`
+	Incognito       bool              `json:"incognito,omitempty"` // throwaway profile, removed on stop
+	Onload          []string          `json:"onload,omitempty"`    // JS evaluated on every navigation
 }
 
 // stateDirOverride allows tests to redirect state to a temp dir
@@ -279,12 +281,21 @@ var commandUsage = map[string]string{
 	"requests":       "rodney requests [--json] [--follow] [--clear]",
 	"requests-start": "rodney requests-start",
 	"requests-stop":  "rodney requests-stop",
-	"viewport":      "rodney viewport <width> <height> [--clear]",
-	"device":        "rodney device <name> [--landscape] [--clear] [--list]",
-	"waitnav":       "rodney waitnav",
-	"headers":       "rodney headers [k=v ...] [--clear]",
-	"resource":      "rodney resource <url> [file|-]",
-	"history":       "rodney history",
+	"viewport":       "rodney viewport <width> <height> [--clear]",
+	"device":         "rodney device <name> [--landscape] [--clear] [--list]",
+	"waitnav":        "rodney waitnav",
+	"headers":        "rodney headers [k=v ...] [--clear]",
+	"resource":       "rodney resource <url> [file|-]",
+	"history":        "rodney history",
+	"drag":           "rodney drag <src-selector> <dst-selector>",
+	"onload":         "rodney onload <js> [--clear]",
+	"waitpage":       "rodney waitpage [seconds]",
+	"stopload":       "rodney stopload",
+	"tap":            "rodney tap <selector>",
+	"xpath-of":       "rodney xpath-of <selector>",
+	"filechooser":    "rodney filechooser <path>",
+	"monitor":        "rodney monitor [host:port]",
+	"doctor":         "rodney doctor",
 }
 
 // cmdHelpEntry is the structured help for one command (Tier 1/2 of the help
@@ -494,26 +505,50 @@ var commandHelp = map[string]cmdHelpEntry{
 
 	// --- Viewport & device emulation ---
 	"viewport": {Group: "Viewport & device emulation", Usage: "rodney viewport <width> <height> [--clear]",
-		Desc:  "Set the page viewport size (affects layout, screenshots, innerWidth). Persists on the page until cleared or the browser stops.",
-		Flags: []string{"--clear   reset to default viewport"},
+		Desc:     "Set the page viewport size (affects layout, screenshots, innerWidth). Persists on the page until cleared or the browser stops.",
+		Flags:    []string{"--clear   reset to default viewport"},
 		Examples: []string{"rodney viewport 1280 800", "rodney screenshot"}},
 	"device": {Group: "Viewport & device emulation", Usage: "rodney device <name> [--landscape] [--clear] [--list]",
-		Desc:  "Emulate a device: viewport, device pixel ratio, touch, and user agent in one step.",
-		Flags: []string{"--landscape   use the landscape orientation", "--clear   stop emulating", "--list    list available devices"},
+		Desc:     "Emulate a device: viewport, device pixel ratio, touch, and user agent in one step.",
+		Flags:    []string{"--landscape   use the landscape orientation", "--clear   stop emulating", "--list    list available devices"},
 		Examples: []string{"rodney device iphone-x", "rodney device pixel-2 --landscape", "rodney device --list"}},
 	"headers": {Group: "Viewport & device emulation", Usage: "rodney headers [k=v ...] [--clear]",
-		Desc:  "Set extra HTTP headers sent with every request on this session (e.g. auth tokens, API versioning). No args: list current. Persists in the session state.",
-		Flags: []string{"--clear   remove all extra headers"},
+		Desc:     "Set extra HTTP headers sent with every request on this session (e.g. auth tokens, API versioning). No args: list current. Persists in the session state.",
+		Flags:    []string{"--clear   remove all extra headers"},
 		Examples: []string{"rodney headers Authorization=Bearer tok", "rodney headers X-Api-Version=2", "rodney headers"}},
 	"waitnav": {Group: "Waiting", Usage: "rodney waitnav",
 		Desc: "Wait until the page navigates to a different URL (redirects, form submits, SPA route changes).", Examples: []string{"rodney waitnav"}},
 
 	// --- Page info extras ---
 	"resource": {Group: "Page info", Usage: "rodney resource <url> [file|-]",
-		Desc:  "Print the cached body of an already-loaded resource (script, XHR response, image) — no new request. Substring URL match.",
+		Desc:     "Print the cached body of an already-loaded resource (script, XHR response, image) — no new request. Substring URL match.",
 		Examples: []string{"rodney resource /api/users", "rodney resource app.js script.js"}},
 	"history": {Group: "Page info", Usage: "rodney history",
 		Desc: "Print the navigation history of the active page (* marks current).", Examples: []string{"rodney history"}},
+	"stopload": {Group: "Page info", Usage: "rodney stopload",
+		Desc: "Stop the page's pending navigation and resource fetches — proceed with a half-loaded page (scraping speed).", Examples: []string{"rodney stopload"}},
+
+	// --- Advanced interaction ---
+	"drag": {Group: "Advanced interaction", Usage: "rodney drag <source-selector> <target-selector>",
+		Desc:     "Drag an element onto another via real mouse events (down, move, up) — sliders, sortables, kanban boards.",
+		Examples: []string{"rodney drag \".card\" \"#done-column\""}},
+	"tap": {Group: "Advanced interaction", Usage: "rodney tap <selector>",
+		Desc: "Tap an element with touch semantics (pairs with `rodney device` emulation).", Examples: []string{"rodney device iphone-x && rodney tap \"#menu\""}},
+	"xpath-of": {Group: "Advanced interaction", Usage: "rodney xpath-of <selector>",
+		Desc: "Print the computed XPath of an element — helps building XPath queries.", Examples: []string{"rodney xpath-of \"h1\""}},
+	"onload": {Group: "Advanced interaction", Usage: "rodney onload <js> [--clear]",
+		Desc:     "Register JS that runs on EVERY navigation of the session (persisted) — hide cookie banners, inject test hooks, stub globals. No args: list.",
+		Flags:    []string{"--clear   remove all onload scripts"},
+		Examples: []string{`rodney onload "document.querySelector('.banner')?.remove()"`, "rodney onload", "rodney onload --clear"}},
+	"filechooser": {Group: "Advanced interaction", Usage: "rodney filechooser <path>",
+		Desc:     "Intercept file choosers as a persistent foreground process: every chooser the page opens gets the given file, until Ctrl+C.",
+		Examples: []string{"rodney filechooser upload.png"}},
+	"waitpage": {Group: "Waiting", Usage: "rodney waitpage [seconds]",
+		Desc: "Wait until a NEW page/tab opens (window.open, target=_blank, OAuth popups) and switch the active page to it.", Examples: []string{"rodney waitpage 30"}},
+	"monitor": {Group: "Debugging", Usage: "rodney monitor [host:port]",
+		Desc: "Serve rod's live monitor web UI (pages, eval console, request log). Foreground process.", Examples: []string{"rodney monitor"}},
+	"doctor": {Group: "Debugging", Usage: "rodney doctor",
+		Desc: "Self-diagnostics: version, Chrome detection, ffmpeg, session state, browser connectivity. Exit 2 if any check fails.", Examples: []string{"rodney doctor"}},
 }
 
 // printCommandHelp renders the Tier-1 help block for one command.
@@ -834,6 +869,24 @@ func main() {
 		cmdResource(args)
 	case "history":
 		cmdHistory(args)
+	case "drag":
+		cmdDrag(args)
+	case "onload":
+		cmdOnload(args)
+	case "waitpage":
+		cmdWaitPage(args)
+	case "stopload":
+		cmdStopLoad(args)
+	case "tap":
+		cmdTap(args)
+	case "xpath-of":
+		cmdXPathOf(args)
+	case "filechooser":
+		cmdFileChooser(args)
+	case "monitor":
+		cmdMonitor(args)
+	case "doctor":
+		cmdDoctor(args)
 	case "help", "-h", "--help":
 		// Tiered help: `help` = overview, `help <cmd>` = structured details,
 		// `help --json` = full machine-readable registry.
@@ -907,9 +960,18 @@ func withPage() (*State, *rod.Browser, *rod.Page) {
 	}
 	// Apply default timeout so element queries don't hang forever
 	page = page.Timeout(defaultTimeout)
-	// Re-apply persisted device emulation / viewport. rod resets to its
-	// default device (1280x800 + UA) on every new session attach, so
-	// overrides from previous CLI processes must be re-applied here.
+	applySessionOverrides(s, page)
+	// Start video capture if recording is active
+	videoCleanup = maybeStartVideoCapture(page)
+	return s, browser, page
+}
+
+// applySessionOverrides re-applies persisted session state (device emulation,
+// viewport, onload scripts, extra headers) to a page. rod resets to its
+// default device (1280x800 + UA) on every new session attach, and
+// EvalOnNewDocument/SetExtraHeaders registrations die with the process —
+// so every connection must re-apply them.
+func applySessionOverrides(s *State, page *rod.Page) {
 	if s.DeviceName != "" {
 		if dev, ok := devicePresets[s.DeviceName]; ok {
 			if s.DeviceLandscape {
@@ -922,7 +984,9 @@ func withPage() (*State, *rod.Browser, *rod.Page) {
 			Width: s.ViewportW, Height: s.ViewportH, DeviceScaleFactor: 1,
 		})
 	}
-	// Apply persisted extra headers (set via `rodney headers`)
+	for _, js := range s.Onload {
+		_, _ = page.EvalOnNewDocument(js)
+	}
 	if len(s.Headers) > 0 {
 		dict := make([]string, 0, len(s.Headers)*2)
 		for k, v := range s.Headers {
@@ -930,9 +994,6 @@ func withPage() (*State, *rod.Browser, *rod.Page) {
 		}
 		_, _ = page.SetExtraHeaders(dict)
 	}
-	// Start video capture if recording is active
-	videoCleanup = maybeStartVideoCapture(page)
-	return s, browser, page
 }
 
 // --- Commands ---
@@ -1225,6 +1286,7 @@ func cmdOpen(args []string) {
 	if err != nil {
 		fatal("%v", err)
 	}
+	_ = browser // used below
 
 	// --reuse: find an existing page already at this URL and switch to it
 	// instead of navigating the active page away. Parallel sessions opening
@@ -1257,6 +1319,9 @@ func cmdOpen(args []string) {
 		if err != nil {
 			fatal("%v", err)
 		}
+		// Re-apply session overrides (onload scripts must be registered
+		// BEFORE the navigation so they run on the new document)
+		applySessionOverrides(s, page)
 		if err := page.Navigate(url); err != nil {
 			fatal("navigation failed: %v", err)
 		}
@@ -1337,9 +1402,37 @@ func cmdTitle(args []string) {
 }
 
 func cmdHTML(args []string) {
+	var rest []string
+	for _, a := range args {
+		if a == "--full" {
+			_, _, page := withPage()
+			res, err := page.Eval(`() => document.documentElement.outerHTML`)
+			if err != nil {
+				fatal("failed to get HTML: %v", err)
+			}
+			fmt.Println(res.Value.Str())
+			// Append same-origin iframe contents (the outerHTML above shows
+			// only the iframe tags, not their documents)
+			n, err := page.Eval(`() => {
+				const docs = [];
+				for (const f of document.querySelectorAll('iframe')) {
+					try { if (f.contentDocument) docs.push(f.contentDocument.documentElement.outerHTML); } catch (e) {}
+				}
+				return docs;
+			}`)
+			if err == nil {
+				for _, d := range n.Value.Arr() {
+					fmt.Printf("\n<!-- iframe content -->\n%v\n", d)
+				}
+			}
+			return
+		}
+		rest = append(rest, a)
+	}
+	args = rest
 	_, _, page := withPage()
 	if len(args) > 0 {
-		el, err := pageEl(page, args[0])
+		el, err := pageElShadow(page, args[0])
 		if err != nil {
 			fatal("element not found: %v", err)
 		}
@@ -1359,7 +1452,7 @@ func cmdText(args []string) {
 		fatal("usage: rodney text <selector>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1375,7 +1468,7 @@ func cmdAttr(args []string) {
 		fatal("usage: rodney attr <selector> <attribute>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1387,12 +1480,58 @@ func cmdAttr(args []string) {
 }
 
 func cmdPDF(args []string) {
+	var landscape bool
+	var format string
+	var margin float64
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--landscape":
+			landscape = true
+		case "--format":
+			i++
+			if i >= len(args) {
+				fatal("--format requires a value (A4, Letter, Legal)")
+			}
+			format = args[i]
+		case "--margin":
+			i++
+			if i >= len(args) {
+				fatal("--margin requires a value in mm")
+			}
+			m, err := strconv.ParseFloat(args[i], 64)
+			if err != nil || m < 0 {
+				fatal("invalid margin: %s", args[i])
+			}
+			margin = m
+		default:
+			rest = append(rest, args[i])
+		}
+	}
 	file := "page.pdf"
-	if len(args) > 0 {
-		file = args[0]
+	if len(rest) > 0 {
+		file = rest[0]
 	}
 	_, _, page := withPage()
-	req := proto.PagePrintToPDF{}
+	ptr := func(f float64) *float64 { return &f }
+	req := proto.PagePrintToPDF{
+		Landscape:    landscape,
+		MarginTop:    ptr(margin / 25.4),
+		MarginBottom: ptr(margin / 25.4),
+		MarginLeft:   ptr(margin / 25.4),
+		MarginRight:  ptr(margin / 25.4),
+	}
+	switch strings.ToLower(format) {
+	case "":
+	case "a4":
+		req.PaperWidth, req.PaperHeight = ptr(8.27), ptr(11.69)
+	case "letter":
+		req.PaperWidth, req.PaperHeight = ptr(8.5), ptr(11)
+	case "legal":
+		req.PaperWidth, req.PaperHeight = ptr(8.5), ptr(14)
+	default:
+		fatal("unknown format %q (A4, Letter, Legal)", format)
+	}
 	r, err := page.PDF(&req)
 	if err != nil {
 		fatal("failed to generate PDF: %v", err)
@@ -1457,6 +1596,43 @@ func pageEl(page *rod.Page, sel string) (*rod.Element, error) {
 	return page.Element(sel)
 }
 
+// globToRegex converts a simple glob (* = anything) to an anchored regex.
+func globToRegex(glob string) string {
+	escaped := regexp.QuoteMeta(glob)
+	escaped = strings.ReplaceAll(escaped, "\\*", ".*")
+	return "^" + escaped + "$"
+}
+
+// pageElDeep resolves "host >>> inner" chains through shadow roots
+// (Playwright convention): each >>> segment descends one shadow boundary.
+func pageElDeep(page *rod.Page, sel string) (*rod.Element, error) {
+	parts := strings.Split(sel, ">>>")
+	cur, err := pageEl(page, strings.TrimSpace(parts[0]))
+	if err != nil {
+		return nil, err
+	}
+	for _, part := range parts[1:] {
+		root, err := cur.ShadowRoot()
+		if err != nil {
+			return nil, fmt.Errorf("no shadow root on %q: %w", parts[0], err)
+		}
+		cur, err = root.Element(strings.TrimSpace(part))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return cur, nil
+}
+
+// pageElShadow routes "a >>> b" selectors through shadow roots; otherwise
+// behaves like pageEl (CSS or XPath).
+func pageElShadow(page *rod.Page, sel string) (*rod.Element, error) {
+	if strings.Contains(sel, ">>>") {
+		return pageElDeep(page, sel)
+	}
+	return pageEl(page, sel)
+}
+
 // pageEls is the plural variant of pageEl (XPath-aware).
 func pageEls(page *rod.Page, sel string) (rod.Elements, error) {
 	if strings.HasPrefix(sel, "//") || strings.HasPrefix(sel, "(") {
@@ -1470,7 +1646,7 @@ func cmdClick(args []string) {
 		fatal("usage: rodney click <selector>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1487,7 +1663,7 @@ func cmdInput(args []string) {
 		fatal("usage: rodney input <selector> <text>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1501,7 +1677,7 @@ func cmdClear(args []string) {
 		fatal("usage: rodney clear <selector>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1835,7 +2011,7 @@ func cmdSubmit(args []string) {
 		fatal("usage: rodney submit <selector>")
 	}
 	_, _, page := withPage()
-	_, err := pageEl(page, args[0])
+	_, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("form not found: %v", err)
 	}
@@ -1848,7 +2024,7 @@ func cmdHover(args []string) {
 		fatal("usage: rodney hover <selector>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1861,7 +2037,7 @@ func cmdFocus(args []string) {
 		fatal("usage: rodney focus <selector>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -1997,7 +2173,7 @@ func cmdScrollEl(args []string) {
 		fatal("usage: rodney scroll-el <selector>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -2022,7 +2198,7 @@ func cmdWait(args []string) {
 		fatal("usage: rodney wait <selector> | rodney wait --url <substring>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -2043,7 +2219,35 @@ func cmdWaitStable(args []string) {
 }
 
 func cmdWaitIdle(args []string) {
+	var includes, excludes []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--include", "--exclude":
+			i++
+			if i >= len(args) {
+				fatal("%s requires a comma-separated pattern list", args[i-1])
+			}
+			for _, p := range strings.Split(args[i], ",") {
+				if p == "" {
+					continue
+				}
+				if args[i-1] == "--include" {
+					includes = append(includes, globToRegex(p))
+				} else {
+					excludes = append(excludes, globToRegex(p))
+				}
+			}
+		default:
+			fatal("unknown flag: %s\nusage: rodney waitidle [--include p1,p2] [--exclude p1,p2]", args[i])
+		}
+	}
 	_, _, page := withPage()
+	if len(includes) > 0 || len(excludes) > 0 {
+		wait := page.WaitRequestIdle(time.Second, includes, excludes, nil)
+		wait()
+		fmt.Println("Network idle (filtered)")
+		return
+	}
 	page.MustWaitIdle()
 	fmt.Println("Network idle")
 }
@@ -2144,7 +2348,7 @@ func cmdScreenshotEl(args []string) {
 		file = args[1]
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fatal("element not found: %v", err)
 	}
@@ -2844,7 +3048,7 @@ func cmdVisible(args []string) {
 		fatal("usage: rodney visible <selector>")
 	}
 	_, _, page := withPage()
-	el, err := pageEl(page, args[0])
+	el, err := pageElShadow(page, args[0])
 	if err != nil {
 		fmt.Println("false")
 		os.Exit(1)
@@ -4806,18 +5010,18 @@ func mustMarshal(v interface{}) []byte {
 
 // devicePresets maps friendly names to rod device presets.
 var devicePresets = map[string]devices.Device{
-	"iphone-se":    devices.IPhone4,
-	"iphone-6":     devices.IPhone6or7or8,
+	"iphone-se":     devices.IPhone4,
+	"iphone-6":      devices.IPhone6or7or8,
 	"iphone-6-plus": devices.IPhone6or7or8Plus,
-	"iphone-x":     devices.IPhoneX,
-	"ipad":         devices.IPad,
-	"pixel-2":      devices.Pixel2,
-	"pixel-2-xl":   devices.Pixel2XL,
-	"nexus-5":      devices.Nexus5,
-	"nexus-6":      devices.Nexus6,
-	"galaxy-s3":    devices.GalaxySIII,
-	"galaxy-s5":    devices.GalaxyS5,
-	"laptop":       devices.LaptopWithMDPIScreen,
+	"iphone-x":      devices.IPhoneX,
+	"ipad":          devices.IPad,
+	"pixel-2":       devices.Pixel2,
+	"pixel-2-xl":    devices.Pixel2XL,
+	"nexus-5":       devices.Nexus5,
+	"nexus-6":       devices.Nexus6,
+	"galaxy-s3":     devices.GalaxySIII,
+	"galaxy-s5":     devices.GalaxyS5,
+	"laptop":        devices.LaptopWithMDPIScreen,
 }
 
 // cmdViewport sets the page viewport (CDP override persists on the target
@@ -5097,4 +5301,338 @@ func cmdHistory(args []string) {
 		}
 		fmt.Printf("%s [%d] %s\n", marker, i, e.URL)
 	}
+}
+
+// elementCenter returns the center point of an element's bounding quad.
+func elementCenter(el *rod.Element) (proto.Point, error) {
+	shape, err := el.Shape()
+	if err != nil || len(shape.Quads) == 0 {
+		return proto.Point{}, fmt.Errorf("failed to get element shape: %w", err)
+	}
+	q := shape.Quads[0] // [x1,y1,x2,y2,x3,y3,x4,y4]
+	var cx, cy float64
+	for i := 0; i < 4; i++ {
+		cx += q[i*2] / 4
+		cy += q[i*2+1] / 4
+	}
+	return proto.Point{X: cx, Y: cy}, nil
+}
+
+// cmdDrag drags the source element onto the target element via real mouse
+// events: move to source, button down, move linearly to target, button up.
+func cmdDrag(args []string) {
+	if len(args) != 2 {
+		fatal("usage: rodney drag <source-selector> <target-selector>")
+	}
+	_, _, page := withPage()
+	src, err := pageElShadow(page, args[0])
+	if err != nil {
+		fatal("source not found: %v", err)
+	}
+	dst, err := pageElShadow(page, args[1])
+	if err != nil {
+		fatal("target not found: %v", err)
+	}
+	if err := src.ScrollIntoView(); err != nil {
+		fatal("scroll to source failed: %v", err)
+	}
+	sp, err := elementCenter(src)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if err := dst.ScrollIntoView(); err != nil {
+		fatal("scroll to target failed: %v", err)
+	}
+	tp, err := elementCenter(dst)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if err := page.Mouse.MoveTo(sp); err != nil {
+		fatal("move to source failed: %v", err)
+	}
+	if err := page.Mouse.Down(proto.InputMouseButtonLeft, 1); err != nil {
+		fatal("mouse down failed: %v", err)
+	}
+	if err := page.Mouse.MoveLinear(tp, 25); err != nil {
+		fatal("move to target failed: %v", err)
+	}
+	if err := page.Mouse.Up(proto.InputMouseButtonLeft, 1); err != nil {
+		fatal("mouse up failed: %v", err)
+	}
+	fmt.Printf("Dragged %s onto %s\n", args[0], args[1])
+}
+
+// cmdOnload manages JS that runs on every navigation (persisted in state,
+// re-registered on each connection because EvalOnNewDocument is
+// session-scoped).
+func cmdOnload(args []string) {
+	clear := false
+	var js []string
+	for _, a := range args {
+		if a == "--clear" {
+			clear = true
+		} else {
+			js = append(js, a)
+		}
+	}
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	if clear {
+		s.Onload = nil
+		if err := saveState(s); err != nil {
+			fatal("failed to save state: %v", err)
+		}
+		fmt.Println("Onload scripts cleared")
+		return
+	}
+	if len(js) == 0 {
+		if len(s.Onload) == 0 {
+			fmt.Println("(no onload scripts)")
+			return
+		}
+		for i, j := range s.Onload {
+			fmt.Printf("[%d] %s\n", i, j)
+		}
+		return
+	}
+	s.Onload = append(s.Onload, strings.Join(js, " "))
+	if err := saveState(s); err != nil {
+		fatal("failed to save state: %v", err)
+	}
+	fmt.Printf("Onload script added [%d total — runs on every navigation]\n", len(s.Onload))
+}
+
+// cmdWaitPage waits until a NEW page/tab opens (window.open, target=_blank)
+// and switches the active page to it.
+func cmdWaitPage(args []string) {
+	timeout := defaultTimeout
+	if len(args) > 0 {
+		secs, err := strconv.ParseFloat(args[0], 64)
+		if err != nil || secs < 0 {
+			fatal("invalid timeout: %s", args[0])
+		}
+		timeout = time.Duration(secs * float64(time.Second))
+	}
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	before, err := browser.Pages()
+	if err != nil {
+		fatal("failed to list pages: %v", err)
+	}
+	known := map[proto.TargetTargetID]bool{}
+	for _, p := range before {
+		known[p.TargetID] = true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		pages, err := browser.Pages()
+		if err == nil {
+			for i, p := range pages {
+				if !known[p.TargetID] {
+					s.ActivePage = i
+					if err := saveState(s); err != nil {
+						fatal("failed to save state: %v", err)
+					}
+					info, _ := p.Info()
+					url := ""
+					if info != nil {
+						url = info.URL
+					}
+					fmt.Printf("New page [%d] (t:%s) %s\n", i, p.TargetID, url)
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	fatal("timeout waiting for a new page")
+}
+
+// cmdStopLoad stops the page's pending navigation and resource fetches.
+func cmdStopLoad(args []string) {
+	_, _, page := withPage()
+	if err := page.StopLoading(); err != nil {
+		fatal("failed to stop loading: %v", err)
+	}
+	fmt.Println("Loading stopped")
+}
+
+// cmdTap taps an element (touch semantics; pairs with `rodney device`).
+func cmdTap(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney tap <selector>")
+	}
+	_, _, page := withPage()
+	el, err := pageElShadow(page, args[0])
+	if err != nil {
+		fatal("element not found: %v", err)
+	}
+	if err := el.Tap(); err != nil {
+		fatal("tap failed: %v", err)
+	}
+	fmt.Println("Tapped")
+}
+
+// cmdXPathOf prints the XPath of an element — helps building xpath queries.
+func cmdXPathOf(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney xpath-of <selector>")
+	}
+	_, _, page := withPage()
+	el, err := pageElShadow(page, args[0])
+	if err != nil {
+		fatal("element not found: %v", err)
+	}
+	xp, err := el.GetXPath(true)
+	if err != nil {
+		fatal("failed to compute xpath: %v", err)
+	}
+	fmt.Println(xp)
+}
+
+// cmdFileChooser arms file-chooser interception as a persistent foreground
+// process: every file chooser opened by the page (click on <input type=file>
+// etc.) gets the given path, until Ctrl+C.
+func cmdFileChooser(args []string) {
+	if len(args) < 1 {
+		fatal("usage: rodney filechooser <path>")
+	}
+	path := args[0]
+	if _, err := os.Stat(path); err != nil {
+		fatal("file not found: %s", path)
+	}
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	page, err := getActivePage(browser, s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+	fmt.Fprintf(os.Stderr, "(intercepting file choosers on the active page, answering with %s — Ctrl+C to stop)\n", path)
+	for {
+		set, err := page.HandleFileDialog()
+		if err != nil {
+			fatal("failed to arm file chooser: %v", err)
+		}
+		if err := set([]string{path}); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to set file: %v\n", err)
+		} else {
+			fmt.Printf("[filechooser] answered with %s\n", path)
+		}
+	}
+}
+
+// cmdMonitor serves rod's live debug web UI (pages, eval console, requests).
+func cmdMonitor(args []string) {
+	host := ":0"
+	if len(args) > 0 {
+		host = args[0]
+	}
+	s, err := loadState()
+	if err != nil {
+		fatal("%v", err)
+	}
+	browser, err := connectBrowser(s)
+	if err != nil {
+		fatal("%v", err)
+	}
+	url := browser.ServeMonitor(host)
+	fmt.Printf("Monitor UI: %s\n(Ctrl+C to stop)\n", url)
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		os.Exit(0)
+	}()
+	select {}
+}
+
+// cmdDoctor runs self-diagnostics: binary version, Chrome availability,
+// ffmpeg, state health, connectivity. Exit 0 if nothing FAILed.
+func cmdDoctor(args []string) {
+	failed := 0
+	check := func(name, detail string, ok bool) {
+		status := "PASS"
+		if !ok {
+			status = "FAIL"
+			failed++
+		}
+		fmt.Printf("%-4s %-22s %s\n", status, name, detail)
+	}
+
+	check("version", version, true)
+
+	// Chrome detection: ROD_CHROME_BIN or rod-managed chromium
+	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
+		if _, err := os.Stat(bin); err == nil {
+			check("chrome", bin+" (ROD_CHROME_BIN)", true)
+		} else {
+			check("chrome", bin+" not found (ROD_CHROME_BIN)", false)
+		}
+	} else if path, has := launcher.LookPath(); has {
+		check("chrome", path+" (rod-managed)", true)
+	} else {
+		check("chrome", "not found — set ROD_CHROME_BIN or run any command once (rod downloads chromium)", false)
+	}
+
+	// ffmpeg for mp4 video output (optional)
+	if _, err := exec.LookPath("ffmpeg"); err == nil {
+		check("ffmpeg", "available (mp4 video output)", true)
+	} else {
+		fmt.Printf("WARN ffmpeg                  not in PATH — stop-video falls back to GIF")
+		fmt.Println()
+	}
+
+	// state health
+	if s, err := loadState(); err == nil {
+		check("state", stateDir()+" (exists)", true)
+		if b, err := connectBrowser(s); err == nil {
+			v, verr := b.Version()
+			detail := "connected"
+			if verr == nil {
+				detail = "connected — " + v.Product
+			}
+			check("browser", detail, true)
+		} else {
+			fmt.Printf("WARN browser                 state exists but browser not responding (stale session? run: rodney stop)")
+			fmt.Println()
+		}
+		check("incognito", fmt.Sprintf("Incognito=%v Headers=%d Onload=%d Device=%q Viewport=%dx%d",
+			s.Incognito, len(s.Headers), len(s.Onload), s.DeviceName, s.ViewportW, s.ViewportH), true)
+	} else {
+		fmt.Printf("WARN state                   no session in %s (run: rodney start)", stateDir())
+		fmt.Println()
+	}
+
+	// state dir writable
+	if err := os.MkdirAll(stateDir(), 0755); err == nil {
+		check("state-dir", stateDir()+" writable", true)
+	} else {
+		check("state-dir", stateDir()+" not writable", false)
+	}
+
+	if failed > 0 {
+		fmt.Printf("\n%d check(s) failed\n", failed)
+		os.Exit(2)
+	}
+	fmt.Println("\nAll checks passed")
 }

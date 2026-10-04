@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,9 @@ func TestMain(m *testing.M) {
 	mux.HandleFunc("/animated", handleAnimated)
 	mux.HandleFunc("/empty", handleEmpty)
 	mux.HandleFunc("/headers", handleHeaders)
+	mux.HandleFunc("/drag", handleDrag)
+	mux.HandleFunc("/shadow", handleShadow)
+	mux.HandleFunc("/beacon", handleBeacon)
 	server := httptest.NewServer(mux)
 
 	env = &testEnv{browser: browser, server: server}
@@ -158,6 +162,39 @@ func handleAnimated(w http.ResponseWriter, r *http.Request) {
 <body><div class="box"></div>
 <div id="c">0</div>
 <script>let n=0; setInterval(()=>{document.getElementById('c').textContent=++n;},100);</script>
+</body></html>`))
+}
+
+func handleDrag(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(`<!DOCTYPE html><html><body>
+<div id="src" style="width:60px;height:60px;background:red">SRC</div>
+<div id="dst" style="width:200px;height:200px;background:#eee;margin-top:50px">DST</div>
+<div id="log"></div>
+<script>
+const log = m => document.getElementById('log').textContent += m + ' ';
+const s = document.getElementById('src');
+let dragging = false;
+s.addEventListener('pointerdown', () => { dragging = true; log('down'); });
+document.addEventListener('pointerup', e => { if (dragging) { dragging = false; log('dropped@' + Math.round(e.clientX) + ',' + Math.round(e.clientY)); } });
+</script></body></html>`))
+}
+
+func handleShadow(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(`<!DOCTYPE html><html><body>
+<div id="host"></div><div id="out"></div>
+<script>
+const root = document.getElementById('host').attachShadow({mode: 'open'});
+root.innerHTML = '<span id="inner" onclick="void 0">shadow text</span>';
+document.getElementById('out').textContent = 'ready';
+</script></body></html>`))
+}
+
+func handleBeacon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(`<!DOCTYPE html><html><body><h1>beacon page</h1>
+<script>setInterval(() => fetch('/analytics-beacon').catch(()=>{}), 200);</script>
 </body></html>`))
 }
 
@@ -3762,5 +3799,215 @@ func TestNavigationHistory(t *testing.T) {
 	}
 	if h.CurrentIndex != len(h.Entries)-1 {
 		t.Errorf("current index = %d, want last entry", h.CurrentIndex)
+	}
+}
+
+// =====================
+// 0.11 feature tests
+// =====================
+
+func TestGlobToRegex(t *testing.T) {
+	cases := map[string][2]string{
+		"*analytics*":       {`^.*analytics.*$`, "https://x.com/analytics/ping"},
+		"api.example.com/*": {`^api\.example\.com/.*$`, "api.example.com/v1"},
+		"exact":             {`^exact$`, "exact"},
+	}
+	for glob, want := range cases {
+		if got := globToRegex(glob); got != want[0] {
+			t.Errorf("globToRegex(%q) = %q, want %q", glob, got, want[0])
+		}
+		re := regexp.MustCompile(globToRegex(glob))
+		if !re.MatchString(want[1]) {
+			t.Errorf("glob %q should match %q", glob, want[1])
+		}
+	}
+}
+
+func TestDragRealMouse(t *testing.T) {
+	page := navigateTo(t, "/drag")
+	src, err := pageElShadow(page, "#src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := pageElShadow(page, "#dst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = src.ScrollIntoView()
+	sp, err := elementCenter(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = dst.ScrollIntoView()
+	tp, err := elementCenter(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := page.Mouse.MoveTo(sp); err != nil {
+		t.Fatal(err)
+	}
+	if err := page.Mouse.Down(proto.InputMouseButtonLeft, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := page.Mouse.MoveLinear(tp, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := page.Mouse.Up(proto.InputMouseButtonLeft, 1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	res, err := page.Eval(`() => document.getElementById('log').textContent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Value.Str()
+	if !strings.Contains(got, "down") || !strings.Contains(got, "dropped@") {
+		t.Errorf("drag log = %q, want down + dropped@", got)
+	}
+}
+
+func TestOnloadEvalOnNewDocument(t *testing.T) {
+	page := env.browser.MustPage("about:blank")
+	t.Cleanup(func() { page.MustClose() })
+	_, err := page.EvalOnNewDocument(`window.__onloadRan = true`)
+	if err != nil {
+		t.Fatalf("EvalOnNewDocument failed: %v", err)
+	}
+	page.Navigate(env.server.URL + "/empty")
+	page.MustWaitLoad()
+	res, err := page.Eval(`() => window.__onloadRan === true`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Value.Bool() {
+		t.Error("onload script did not run on navigation")
+	}
+}
+
+func TestWaitPageDetectsNew(t *testing.T) {
+	page := navigateTo(t, "/empty")
+	before, _ := env.browser.Pages()
+	known := map[proto.TargetTargetID]bool{}
+	for _, p := range before {
+		known[p.TargetID] = true
+	}
+	go func() {
+		_, _ = page.Eval(`() => { setTimeout(() => window.open('/form'), 300); return 1; }`)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	var found *rod.Page
+	for time.Now().Before(deadline) {
+		pages, _ := env.browser.Pages()
+		for _, p := range pages {
+			if !known[p.TargetID] {
+				found = p
+			}
+		}
+		if found != nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if found == nil {
+		t.Fatal("new page not detected")
+	}
+	found.MustClose()
+}
+
+func TestWaitRequestIdleExclude(t *testing.T) {
+	page := navigateTo(t, "/beacon")
+	time.Sleep(500 * time.Millisecond)
+	// With the beacon excluded, idle must be reached quickly
+	done := make(chan struct{})
+	go func() {
+		page.Timeout(8*time.Second).WaitRequestIdle(500*time.Millisecond,
+			nil, []string{`^.*analytics.*$`}, nil)()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// success
+	case <-time.After(10 * time.Second):
+		t.Fatal("WaitRequestIdle with exclude never went idle (beacon should be ignored)")
+	}
+}
+
+func TestHTMLFullIncludesIframe(t *testing.T) {
+	page := env.browser.MustPage(env.server.URL + "/empty")
+	t.Cleanup(func() { page.MustClose() })
+	page.MustEval(`() => {
+		const f = document.createElement('iframe');
+		f.src = '/headers';
+		document.body.appendChild(f);
+		return true;
+	}`)
+	page.MustWaitLoad()
+	time.Sleep(300 * time.Millisecond)
+	res, err := page.Eval(`() => {
+		const docs = [];
+		for (const f of document.querySelectorAll('iframe')) {
+			try { if (f.contentDocument) docs.push(f.contentDocument.documentElement.outerHTML); } catch (e) {}
+		}
+		return docs.join('|');
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Value.Str(), "<html") {
+		t.Error("iframe content not captured")
+	}
+}
+
+func TestShadowPiercingSelector(t *testing.T) {
+	page := navigateTo(t, "/shadow")
+	el, err := pageElShadow(page, "#host >>> #inner")
+	if err != nil {
+		t.Fatalf("shadow piercing failed: %v", err)
+	}
+	txt, err := el.Text()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txt != "shadow text" {
+		t.Errorf("shadow text = %q, want 'shadow text'", txt)
+	}
+}
+
+func TestXPathOf(t *testing.T) {
+	page := navigateTo(t, "/")
+	el, err := pageElShadow(page, "h1")
+	if err != nil && strings.Contains(err.Error(), "not found") {
+		el, err = pageElShadow(page, "nav")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	xp, err := el.GetXPath(true)
+	if err != nil {
+		t.Fatalf("GetXPath failed: %v", err)
+	}
+	if !strings.HasPrefix(xp, "/") {
+		t.Errorf("xpath = %q, want absolute path", xp)
+	}
+}
+
+func TestTapFiresPointerEvents(t *testing.T) {
+	page := navigateTo(t, "/drag")
+	// listen for pointerdown anywhere
+	page.MustEval(`() => { window._taps = 0; document.addEventListener('pointerdown', () => window._taps++); return true; }`)
+	el, err := pageElShadow(page, "#src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := el.Tap(); err != nil {
+		t.Fatalf("tap failed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	res, err := page.Eval(`() => window._taps`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Value.Int() < 1 {
+		t.Error("tap did not fire pointerdown")
 	}
 }

@@ -246,6 +246,27 @@ rodney history                          # Navigation history, * marks current en
 rodney start --incognito                # Throwaway profile — fully deleted on rodney stop
 ```
 
+### Advanced automation
+
+```bash
+rodney drag ".card" "#done-column"     # Real mouse drag (sliders, sortables, kanban)
+rodney tap "#menu"                     # Touch tap (pairs with `rodney device iphone-x`)
+rodney xpath-of "h1"                   # Print an element's XPath — helps building queries
+rodney click "#host >>> #inner"        # >>> pierces shadow DOM boundaries
+
+rodney onload "document.addEventListener('DOMContentLoaded', () => document.querySelector('.banner')?.remove())"
+rodney onload                          # list; runs at document start on EVERY navigation (persisted)
+rodney onload --clear
+
+rodney waitpage 30                     # Wait for a new tab/popup (OAuth, window.open) and switch to it
+rodney waitidle --exclude "*analytics*"  # Network idle, ignoring tracker beacons
+rodney stopload                        # Stop pending loads — proceed with a half-loaded page
+
+rodney filechooser upload.png          # Intercept file choosers (foreground, Ctrl+C to stop)
+rodney monitor                         # rod's live monitor web UI (pages, console, requests)
+rodney doctor                          # Self-diagnostics: chrome, ffmpeg, state, connectivity
+```
+
 ### Viewport, device emulation, extra headers
 
 ```bash

@@ -44,6 +44,8 @@ Interaction:
   rodney submit <selector>        Submit a form
   rodney hover <selector>         Hover over an element
   rodney focus <selector>         Focus an element
+  rodney drag <src> <dst>         Drag an element onto another (real mouse)
+  rodney tap <selector>           Tap an element (touch, pairs with device)
   rodney scroll <x> <y> [--steps N]  Scroll page by pixels (negative y = up)
   rodney scroll-el <selector>     Scroll an element into view
 
@@ -53,7 +55,12 @@ Waiting:
   rodney waitnav                  Wait until the page navigates elsewhere
   rodney waitload                 Wait for page load
   rodney waitstable               Wait for DOM to stabilize
-  rodney waitidle                 Wait for network idle
+  rodney waitidle [--include p] [--exclude p]
+                                  Wait for network idle (--include/--exclude:
+                                  glob patterns, e.g. --exclude *analytics*)
+  rodney waitpage [seconds]       Wait for a NEW page/tab (popups, OAuth)
+                                  and switch to it
+  rodney stopload                 Stop pending navigation/fetches
   rodney sleep <seconds>          Sleep for N seconds
 
 Screenshots:
@@ -146,9 +153,20 @@ Accessibility:
   rodney ax-find [--name N] [--role R] [--json]  Find accessible nodes
   rodney ax-node <selector> [--json]        Show accessibility info for element
 
+Advanced:
+  rodney onload <js> [--clear]    JS that runs on EVERY navigation (persisted;
+                                  runs at document start — wrap DOM access in
+                                  DOMContentLoaded). No args: list
+  rodney xpath-of <selector>      Print the XPath of an element
+  rodney filechooser <path>       Intercept file choosers (foreground; every
+                                  chooser gets the file until Ctrl+C)
+  rodney monitor [host:port]      Serve rod's live monitor web UI (foreground)
+  rodney doctor                   Self-diagnostics (chrome, ffmpeg, state, ...)
+
 Selector convention:
   Commands taking <selector> accept CSS by default. Selectors starting
   with "//" or "(" are treated as XPath (e.g. rodney click "//button[@id='x']").
+  "host >>> inner" pierces shadow DOM boundaries (one >>> per shadow root).
 
 Options:
   --session <name>                Use a named session (~/.rodney-sessions/<name>/)
