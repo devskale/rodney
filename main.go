@@ -327,7 +327,7 @@ var commandHelp = map[string]cmdHelpEntry{
 	// --- Navigation ---
 	"open": {Group: "Navigation", Usage: "rodney open <url> [--reuse]",
 		Desc:     "Navigate the active page to a URL. http:// is added if no scheme is given.",
-		Flags:    []string{"--reuse    switch to an existing page already at that URL instead of navigating the active page away"},
+		Flags:    []string{"--reuse    switch to an existing page at that URL (exact, or same-origin path prefix — /dash attaches to a page at /dash/ai) instead of navigating the active page away"},
 		Examples: []string{"rodney open https://example.com", "rodney open https://example.com --reuse"}},
 	"back":    {Group: "Navigation", Usage: "rodney back", Desc: "Go back one step in history.", Examples: []string{"rodney back"}},
 	"forward": {Group: "Navigation", Usage: "rodney forward", Desc: "Go forward one step in history.", Examples: []string{"rodney forward"}},
@@ -1259,6 +1259,37 @@ func normalizeURL(u string) string {
 	return u
 }
 
+// normPath strips a single trailing slash (but keeps root "/") so "/a/" == "/a".
+func normPath(p string) string {
+	if len(p) > 1 && strings.HasSuffix(p, "/") {
+		return strings.TrimSuffix(p, "/")
+	}
+	return p
+}
+
+// urlPrefixMatch reports whether want is a same-origin path-segment prefix of
+// cur: scheme and host:port must match, and want's path must be a prefix of
+// cur's path at a "/" boundary. So "http://h/dash" matches "http://h/dash/ai"
+// (attaches to the deeper page) but not "http://h/dashboard". A bare origin
+// ("" or "/") never prefix-matches — that would match every page on the host.
+// Mirrors surf's Tier 2 reuse (skale-skills/skills/surf, scripts/lib/nav.sh).
+func urlPrefixMatch(want, cur string) bool {
+	w, err1 := url.Parse(want)
+	c, err2 := url.Parse(cur)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	if w.Scheme != c.Scheme || w.Host != c.Host {
+		return false
+	}
+	wp := normPath(w.Path)
+	if wp == "" || wp == "/" {
+		return false
+	}
+	cp := normPath(c.Path)
+	return cp == wp || strings.HasPrefix(cp, wp+"/")
+}
+
 func cmdOpen(args []string) {
 	if len(args) < 1 {
 		fatal("usage: rodney open <url> [--reuse]")
@@ -1288,10 +1319,13 @@ func cmdOpen(args []string) {
 	}
 	_ = browser // used below
 
-	// --reuse: find an existing page already at this URL and switch to it
-	// instead of navigating the active page away. Parallel sessions opening
-	// the same URL converge on ONE page instead of opening it N times.
-	// Trailing slash is normalized (example.com == example.com/).
+	// --reuse: find an existing page at this URL and switch to it instead of
+	// navigating the active page away. Parallel sessions opening the same URL
+	// converge on ONE page instead of opening it N times. Two tiers, exact
+	// first across ALL pages (an exact hit anywhere beats a prefix hit):
+	//   1. exact URL match (trailing slash normalized)
+	//   2. same-origin path-segment prefix — open host/dashboard attaches to a
+	//      page at host/dashboard/ai-chat (deeper page, same session state)
 	if reuse {
 		if pages, err := browser.Pages(); err == nil {
 			for i, p := range pages {
@@ -1301,6 +1335,16 @@ func cmdOpen(args []string) {
 						fatal("failed to save state: %v", err)
 					}
 					fmt.Printf("reuse: page [%d] %s\n", i, url)
+					return
+				}
+			}
+			for i, p := range pages {
+				if info, _ := p.Info(); info != nil && urlPrefixMatch(url, info.URL) {
+					s.ActivePage = i
+					if err := saveState(s); err != nil {
+						fatal("failed to save state: %v", err)
+					}
+					fmt.Printf("reuse: page [%d] %s → %s\n", i, url, info.URL)
 					return
 				}
 			}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -2988,6 +2989,136 @@ func TestNormalizeURL(t *testing.T) {
 		if got := normalizeURL(in); got != want {
 			t.Errorf("normalizeURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestURLPrefixMatch(t *testing.T) {
+	const base = "http://h:3000"
+	cases := []struct {
+		want, cur string
+		ok        bool
+	}{
+		// tier-2 positives: same origin, "/"-boundary prefix
+		{base + "/dash", base + "/dash", true},       // exact path is its own prefix
+		{base + "/dash", base + "/dash/ai", true},     // deeper page — the attach case
+		{base + "/dash/", base + "/dash/ai", true},    // trailing slash normalized
+		{base + "/dash", base + "/dash?x=1", true},    // query lives outside Path
+		{base + "/a/b", base + "/a/b/c/d", true},     // multi-segment
+		// negatives
+		{base + "/dash", base + "/dashboard", false},            // no "/" boundary
+		{base, base + "/any", false},                              // bare origin never prefix-matches
+		{base + "/", base + "/any", false},                       // root path likewise
+		{base + "/dash", "http://h:9999/dash/ai", false},          // different port
+		{"https://h/dash", "http://h/dash/ai", false},             // different scheme
+		{base + "/dash", "http://evil/dash/ai", false},            // different host
+		{base + "/dash", base + "", false},                        // cur has no path
+	}
+	for _, c := range cases {
+		if got := urlPrefixMatch(c.want, c.cur); got != c.ok {
+			t.Errorf("urlPrefixMatch(%q, %q) = %v, want %v", c.want, c.cur, got, c.ok)
+		}
+	}
+}
+
+// TestOpenReuseLive — e2e: `open --reuse` attaches to an existing page.
+// Helper-process pattern (like the collector e2e tests): the child runs
+// cmdOpen against a temp RODNEY_HOME whose state.json points at the shared
+// test browser; the parent asserts the active page switched. Covers both
+// tiers: exact URL match and same-origin path-segment prefix.
+func TestOpenReuseLive(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		args := os.Args
+		for i, a := range args {
+			if a == "--" {
+				sub := args[i+1:]
+				if len(sub) > 0 && sub[0] == "open" {
+					sub = sub[1:]
+				}
+				cmdOpen(sub)
+				return
+			}
+		}
+		return
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("cannot resolve test binary")
+	}
+
+	deepURL := env.server.URL + "/reuse/deep/page"
+	deep := env.browser.MustPage(deepURL)
+	t.Cleanup(func() { deep.MustClose() })
+	other := env.browser.MustPage(env.server.URL + "/form")
+	t.Cleanup(func() { other.MustClose() })
+	deep.MustWaitLoad()
+	other.MustWaitLoad()
+
+	// resolve deep's index in the pages list (targets order)
+	deepIdx := -1
+	pages, err := env.browser.Pages()
+	if err != nil {
+		t.Fatalf("list pages: %v", err)
+	}
+	for i, p := range pages {
+		if info, _ := p.Info(); info != nil && info.URL == deepURL {
+			deepIdx = i
+			break
+		}
+	}
+	if deepIdx < 0 {
+		t.Fatal("deep test page not found in pages list")
+	}
+
+	// runOpen: helper executes `open <url> --reuse` with RODNEY_HOME=tmpdir
+	runOpen := func(urlArg string) (string, []byte) {
+		home := t.TempDir()
+		state := fmt.Sprintf(`{"debug_url":%q,"chrome_pid":0,"active_page":0,"data_dir":%q}`,
+			testBrowserURL, home)
+		if err := os.WriteFile(filepath.Join(home, "state.json"), []byte(state), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		cmd := exec.Command(exe, "-test.run=TestOpenReuseLive", "--", "open", urlArg, "--reuse")
+		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1", "RODNEY_HOME="+home)
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("helper open failed: %v\noutput:\n%s", err, out.String())
+		}
+		saved, err := os.ReadFile(filepath.Join(home, "state.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), saved
+	}
+
+	var st struct {
+		ActivePage int `json:"active_page"`
+	}
+
+	// Tier 2: prefix attaches to the deeper page (arrow in output)
+	out, saved := runOpen(env.server.URL + "/reuse")
+	if !strings.Contains(out, "reuse: page [") || !strings.Contains(out, "→") {
+		t.Errorf("tier-2 prefix reuse should print 'reuse: page [i] <url> → <taburl>': %q", out)
+	}
+	if err := json.Unmarshal(saved, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.ActivePage != deepIdx {
+		t.Errorf("tier-2 reuse active_page = %d, want %d (deep page)", st.ActivePage, deepIdx)
+	}
+
+	// Tier 1: exact match reuses without the arrow
+	out, saved = runOpen(deepURL)
+	if !strings.Contains(out, "reuse: page [") || strings.Contains(out, "→") {
+		t.Errorf("tier-1 exact reuse should print 'reuse: page [i] <url>' without arrow: %q", out)
+	}
+	if err := json.Unmarshal(saved, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.ActivePage != deepIdx {
+		t.Errorf("tier-1 reuse active_page = %d, want %d", st.ActivePage, deepIdx)
 	}
 }
 
