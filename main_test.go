@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,13 +34,27 @@ type testEnv struct {
 var env *testEnv
 
 func TestMain(m *testing.M) {
-	// Launch headless Chrome once for all tests
+	// Launch headless Chrome once for all tests.
+	// Self-decompose (fork rule, 2026-10-05): a dedicated user-data dir + PID
+	// file under t.TempDir-style cleanup. If a test run is interrupted (Ctrl-C,
+	// panic, -run subset), the leaked Chromium is findable and killable by
+	// `rodney-cleanup --clean` — and normal exits sweep their own dir. Without
+	// a fixed UserDataDir, go-rod scatters a random $TMPDIR/rod/user-data/<hex>
+	// dir per run (leak residue: 139 dirs / 2.0 GB found on mac).
+	testDataDir, err := os.MkdirTemp("", "rodney-test-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create test data dir: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(testDataDir)
+
 	l := launcher.New().
 		Set("no-sandbox").
 		Set("disable-gpu").
 		Set("single-process").
 		Headless(true).
-		Leakless(false)
+		Leakless(false).
+		UserDataDir(filepath.Join(testDataDir, "chrome-data"))
 
 	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 		l = l.Bin(bin)
@@ -47,6 +62,12 @@ func TestMain(m *testing.M) {
 
 	u := l.MustLaunch()
 	browser := rod.New().ControlURL(u).MustConnect()
+
+	// Record the test browser PID so leaked instances are attributable (and
+	// sweepable) even when the test process dies before cleanup runs.
+	if pid := l.PID(); pid > 0 {
+		_ = os.WriteFile(filepath.Join(testDataDir, "chrome.pid"), []byte(strconv.Itoa(pid)), 0644)
+	}
 
 	// Start test HTTP server with known HTML fixtures
 	mux := http.NewServeMux()
