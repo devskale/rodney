@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -34,6 +35,16 @@ type testEnv struct {
 var env *testEnv
 
 func TestMain(m *testing.M) {
+	// Helper-process guard: collector e2e tests re-exec this binary with
+	// -test.run=<Collector> and GO_WANT_HELPER_PROCESS=1. That re-exec runs
+	// TestMain too — which would launch a SECOND browser whose cleanup never
+	// runs (the parent SIGKILLs the helper). The helper connects to the parent's
+	// browser via testBrowserURL; it must not launch its own. (Leak found
+	// 2026-10-05: every full suite run left 2 Chromiums alive.)
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		os.Exit(m.Run())
+	}
+
 	// Launch headless Chrome once for all tests.
 	// Self-decompose (fork rule, 2026-10-05): a dedicated user-data dir + PID
 	// file under t.TempDir-style cleanup. If a test run is interrupted (Ctrl-C,
@@ -1568,12 +1579,20 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 
 	// Test 1: Browser WITHOUT --ignore-certificate-errors should fail
 	t.Run("WithoutInsecureFlag", func(t *testing.T) {
+		// Self-decompose: dedicated dir + cleanup, same as TestMain (a leaked
+		// browser here survived the whole suite green — found 2026-10-05).
+		testDataDir, err := os.MkdirTemp("", "rodney-test-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(testDataDir) })
 		l := launcher.New().
 			Set("no-sandbox").
 			Set("disable-gpu").
 			Set("single-process").
 			Headless(true).
-			Leakless(false)
+			Leakless(false).
+			UserDataDir(filepath.Join(testDataDir, "chrome-data"))
 
 		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 			l = l.Bin(bin)
@@ -1581,29 +1600,44 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 
 		u := l.MustLaunch()
 		browser := rod.New().ControlURL(u).MustConnect()
-		defer browser.MustClose()
+		defer func() {
+			browser.MustClose()
+			// MustClose alone does not reliably kill a single-process Chromium
+			// once the test binary is exiting — kill by PID too (leak found
+			// 2026-10-05: full suite green, 2 browsers alive).
+			if p := l.PID(); p > 0 {
+				proc, _ := os.FindProcess(p)
+				_ = proc.Signal(syscall.SIGTERM)
+			}
+		}()
 
 		page := browser.MustPage("")
 		defer page.MustClose()
 
-		err := page.Navigate(httpsServer.URL)
-		if err == nil {
+		nerr := page.Navigate(httpsServer.URL)
+		if nerr == nil {
 			t.Fatal("expected ERR_CERT_AUTHORITY_INVALID error, but navigation succeeded")
 		}
-		if !strings.Contains(err.Error(), "ERR_CERT_AUTHORITY_INVALID") {
-			t.Errorf("expected ERR_CERT_AUTHORITY_INVALID, got: %v", err)
+		if !strings.Contains(nerr.Error(), "ERR_CERT_AUTHORITY_INVALID") {
+			t.Errorf("expected ERR_CERT_AUTHORITY_INVALID, got: %v", nerr)
 		}
 	})
 
 	// Test 2: Browser WITH --ignore-certificate-errors should succeed
 	t.Run("WithInsecureFlag", func(t *testing.T) {
+		testDataDir, err := os.MkdirTemp("", "rodney-test-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(testDataDir) })
 		l := launcher.New().
 			Set("no-sandbox").
 			Set("disable-gpu").
 			Set("single-process").
 			Set("ignore-certificate-errors"). // This is what --insecure sets
 			Headless(true).
-			Leakless(false)
+			Leakless(false).
+			UserDataDir(filepath.Join(testDataDir, "chrome-data"))
 
 		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 			l = l.Bin(bin)
@@ -1611,7 +1645,13 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 
 		u := l.MustLaunch()
 		browser := rod.New().ControlURL(u).MustConnect()
-		defer browser.MustClose()
+		defer func() {
+			browser.MustClose()
+			if p := l.PID(); p > 0 {
+				proc, _ := os.FindProcess(p)
+				_ = proc.Signal(syscall.SIGTERM)
+			}
+		}()
 
 		// Try to navigate to HTTPS server with invalid cert
 		page := browser.MustPage(httpsServer.URL)
