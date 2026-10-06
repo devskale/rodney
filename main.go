@@ -248,8 +248,8 @@ var commandUsage = map[string]string{
 	"screenshot-el":  "rodney screenshot-el <selector> [file]",
 	"start-video":    "rodney start-video",
 	"stop-video":     "rodney stop-video [file]",
-	"pages":          "rodney pages [--json]",
-	"page":           "rodney page <index|t:targetID>",
+	"pages":          "rodney pages [pattern] [--json]",
+	"page":           "rodney page <index|t:targetID|pattern>",
 	"newpage":        "rodney newpage [url]",
 	"closepage":      "rodney closepage [index|t:targetID]",
 	"press":          "rodney press <key> [key ...]",
@@ -415,12 +415,12 @@ var commandHelp = map[string]cmdHelpEntry{
 		Desc: "Stop recording and save. .gif by default; .mp4 requires ffmpeg in PATH.", Examples: []string{"rodney stop-video demo.gif"}},
 
 	// --- Tabs ---
-	"pages": {Group: "Tabs", Usage: "rodney pages [--json]",
-		Desc:     "List all pages/tabs. * marks the active one.",
+	"pages": {Group: "Tabs", Usage: "rodney pages [pattern] [--json]",
+		Desc:     "List pages/tabs — all, or those whose URL/title contains pattern (case-insensitive). * marks the active one; indices stay original, so a filtered row's [i] works as page <i>.",
 		Flags:    []string{"--json   machine-readable: index, target, title, url, active"},
-		Examples: []string{"rodney pages", "rodney pages --json"}},
-	"page": {Group: "Tabs", Usage: "rodney page <index|t:targetID>",
-		Desc:     "Switch the active page. t:<id> pins by stable target ID — drift-proof when parallel sessions shift indices.",
+		Examples: []string{"rodney pages", "rodney pages dashboard", "rodney pages --json dashboard"}},
+	"page": {Group: "Tabs", Usage: "rodney page <index|t:targetID|pattern>",
+		Desc:     "Switch the active page. t:<id> pins by stable target ID — drift-proof when parallel sessions shift indices. A pattern (non-numeric, no t:) attaches to the first page whose URL/title contains it; if several match, the output says so.",
 		Examples: []string{"rodney page 1", "rodney page t:ABC123"}},
 	"newpage": {Group: "Tabs", Usage: "rodney newpage [url]", Desc: "Open a new page/tab and make it active.", Examples: []string{"rodney newpage https://example.com"}},
 	"closepage": {Group: "Tabs", Usage: "rodney closepage [index|t:targetID]",
@@ -2830,14 +2830,30 @@ func countFrames(dir string) int {
 	return n
 }
 
+// pageMatches reports whether a page's URL or title contains q
+// (case-insensitive substring). The pattern behind `pages <pattern>`
+// filtering and `page <pattern>` attach-to-any — loose by design: the agent
+// lists first (`pages dashboard`) when it must be specific.
+func pageMatches(url, title, q string) bool {
+	if q == "" {
+		return true
+	}
+	q = strings.ToLower(q)
+	return strings.Contains(strings.ToLower(url), q) || strings.Contains(strings.ToLower(title), q)
+}
+
 func cmdPages(args []string) {
 	asJSON := false
+	pattern := ""
 	for _, a := range args {
 		switch a {
 		case "--json":
 			asJSON = true
 		default:
-			fatal("unknown flag: %s\nusage: rodney pages [--json]", a)
+			if pattern != "" {
+				fatal("unexpected argument: %s\nusage: rodney pages [pattern] [--json]", a)
+			}
+			pattern = a
 		}
 	}
 	s, err := loadState()
@@ -2852,6 +2868,25 @@ func cmdPages(args []string) {
 	if err != nil {
 		fatal("failed to list pages: %v", err)
 	}
+	// pattern filter: URL/title substring — indices stay ORIGINAL so a
+	// filtered row's [i] still works as `page <i>` / `closepage <i>`.
+	type row struct {
+		idx    int
+		title  string
+		url    string
+		active bool
+	}
+	rows := make([]row, 0, len(pages))
+	for i, p := range pages {
+		info, _ := p.Info()
+		r := row{idx: i, title: "", url: "", active: i == s.ActivePage}
+		if info != nil {
+			r.title, r.url = info.Title, info.URL
+		}
+		if pageMatches(r.url, r.title, pattern) {
+			rows = append(rows, r)
+		}
+	}
 	if asJSON {
 		type pageInfo struct {
 			Index  int    `json:"index"`
@@ -2860,14 +2895,9 @@ func cmdPages(args []string) {
 			URL    string `json:"url"`
 			Active bool   `json:"active"`
 		}
-		list := make([]pageInfo, 0, len(pages))
-		for i, p := range pages {
-			pi := pageInfo{Index: i, Target: string(p.TargetID), Active: i == s.ActivePage}
-			if info, _ := p.Info(); info != nil {
-				pi.Title = info.Title
-				pi.URL = info.URL
-			}
-			list = append(list, pi)
+		list := make([]pageInfo, 0, len(rows))
+		for _, r := range rows {
+			list = append(list, pageInfo{Index: r.idx, Target: string(pages[r.idx].TargetID), Title: r.title, URL: r.url, Active: r.active})
 		}
 		b, err := json.MarshalIndent(list, "", "  ")
 		if err != nil {
@@ -2876,23 +2906,22 @@ func cmdPages(args []string) {
 		fmt.Println(string(b))
 		return
 	}
-	for i, p := range pages {
+	for _, r := range rows {
 		marker := " "
-		if i == s.ActivePage {
+		if r.active {
 			marker = "*"
 		}
-		info, _ := p.Info()
-		if info != nil {
-			fmt.Printf("%s [%d] (t:%s) %s - %s\n", marker, i, p.TargetID, info.Title, info.URL)
+		if r.url != "" {
+			fmt.Printf("%s [%d] (t:%s) %s - %s\n", marker, r.idx, pages[r.idx].TargetID, r.title, r.url)
 		} else {
-			fmt.Printf("%s [%d] (t:%s) (unknown)\n", marker, i, p.TargetID)
+			fmt.Printf("%s [%d] (t:%s) (unknown)\n", marker, r.idx, pages[r.idx].TargetID)
 		}
 	}
 }
 
 func cmdPage(args []string) {
 	if len(args) < 1 {
-		fatal("usage: rodney page <index|t:targetID>")
+		fatal("usage: rodney page <index|t:targetID|pattern>")
 	}
 	s, err := loadState()
 	if err != nil {
@@ -2927,7 +2956,39 @@ func cmdPage(args []string) {
 	}
 	idx, err := strconv.Atoi(args[0])
 	if err != nil {
-		fatal("invalid index: %v", err)
+		// pattern: substring match against URL/title (case-insensitive) —
+		// attach to the FIRST match; when several match, say so, so the agent
+		// can list (`pages <pattern>`) and re-attach specifically.
+		q := args[0]
+		first, matches := -1, 0
+		for i, p := range pages {
+			info, _ := p.Info()
+			u, ti := "", ""
+			if info != nil {
+				u, ti = info.URL, info.Title
+			}
+			if pageMatches(u, ti, q) {
+				matches++
+				if first < 0 {
+					first = i
+				}
+			}
+		}
+		if first < 0 {
+			fatal("no page matches %q (list with: rodney pages %s)", q, q)
+		}
+		s.ActivePage = first
+		if err := saveState(s); err != nil {
+			fatal("failed to save state: %v", err)
+		}
+		info, _ := pages[first].Info()
+		if info != nil {
+			fmt.Printf("Switched to [%d] %s - %s\n", first, info.Title, info.URL)
+		}
+		if matches > 1 {
+			fmt.Printf("(%d more pages match %q — list with: rodney pages %s)\n", matches-1, q, q)
+		}
+		return
 	}
 	if idx < 0 || idx >= len(pages) {
 		fatal("page index %d out of range (0-%d)", idx, len(pages)-1)

@@ -3025,6 +3025,149 @@ func TestURLPrefixMatch(t *testing.T) {
 // cmdOpen against a temp RODNEY_HOME whose state.json points at the shared
 // test browser; the parent asserts the active page switched. Covers both
 // tiers: exact URL match and same-origin path-segment prefix.
+// TestPageMatches — unit: the substring pattern behind pages/page filtering.
+func TestPageMatches(t *testing.T) {
+	cases := []struct {
+		url, title, q string
+		ok            bool
+	}{
+		{"http://h/dashboard/ai", "AI", "dashboard", true},   // URL hit
+		{"http://h/x", "Dashboard Settings", "dashboard", true}, // title hit
+		{"http://h/DASHBOARD", "", "dashboard", true},           // case-insensitive
+		{"http://h/dashboard", "", "DASHBOARD", true},           // either side
+		{"http://h/settings", "Backup", "dashboard", false},     // no hit
+		{"http://h/x", "y", "", true},                             // empty query = all
+		{"http://h/dashboard-x", "", "dashboard", true},          // loose: -x siblings match
+	}
+	for _, c := range cases {
+		if got := pageMatches(c.url, c.title, c.q); got != c.ok {
+			t.Errorf("pageMatches(%q, %q, %q) = %v, want %v", c.url, c.title, c.q, got, c.ok)
+		}
+	}
+}
+
+// TestPagesPatternLive — e2e: `pages <pattern>` filters by URL/title substring
+// with ORIGINAL indices (a filtered row's [i] still works as `page <i>`), and
+// `page <pattern>` attaches to the first match, announcing ambiguity.
+// Helper-process pattern: the child runs cmdPages/cmdPage against a temp
+// RODNEY_HOME whose state.json points at the shared test browser.
+func TestPagesPatternLive(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		args := os.Args
+		for i, a := range args {
+			if a == "--" {
+				sub := args[i+1:]
+				if len(sub) > 0 {
+					switch sub[0] {
+					case "pages":
+						cmdPages(sub[1:])
+					case "page":
+						cmdPage(sub[1:])
+					}
+				}
+				return
+			}
+		}
+		return
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("cannot resolve test binary")
+	}
+
+	urlA := env.server.URL + "/dash-alpha"
+	urlB := env.server.URL + "/dash-beta"
+	pageA := env.browser.MustPage(urlA)
+	t.Cleanup(func() { pageA.MustClose() })
+	pageB := env.browser.MustPage(urlB)
+	t.Cleanup(func() { pageB.MustClose() })
+	pageA.MustWaitLoad()
+	pageB.MustWaitLoad()
+
+	// expected original index of pageA (pages list order — other tests may
+	// have left pages open, so resolve dynamically)
+	idxA := -1
+	pages, err := env.browser.Pages()
+	if err != nil {
+		t.Fatalf("list pages: %v", err)
+	}
+	for i, p := range pages {
+		if info, _ := p.Info(); info != nil && info.URL == urlA {
+			idxA = i
+			break
+		}
+	}
+	if idxA < 0 {
+		t.Fatal("dash-alpha page not found")
+	}
+
+	runCLI := func(sub ...string) string {
+		home := t.TempDir()
+		state := fmt.Sprintf(`{"debug_url":%q,"chrome_pid":0,"active_page":0,"data_dir":%q}`,
+			testBrowserURL, home)
+		if err := os.WriteFile(filepath.Join(home, "state.json"), []byte(state), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		args := append([]string{"-test.run=TestPagesPatternLive", "--"}, sub...)
+		cmd := exec.Command(exe, args...)
+		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1", "RODNEY_HOME="+home)
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("helper %v failed: %v\noutput:\n%s", sub, err, out.String())
+		}
+		return out.String()
+	}
+
+	// list: pattern filter keeps original indices, shows only dash pages
+	out := runCLI("pages", "dash")
+	if !strings.Contains(out, "dash-alpha") || !strings.Contains(out, "dash-beta") {
+		t.Errorf("pages dash should list both dash pages: %q", out)
+	}
+	if strings.Contains(out, "/form") {
+		t.Errorf("pages dash must not list non-matching pages: %q", out)
+	}
+	if !strings.Contains(out, fmt.Sprintf("[%d]", idxA)) {
+		t.Errorf("pages dash should keep original index [%d] for dash-alpha: %q", idxA, out)
+	}
+
+	// json: same filter, original index field (Decoder stops at the first JSON
+	// value — the child test binary appends its own "PASS" line after)
+	out = runCLI("pages", "--json", "dash")
+	var list []struct {
+		Index int    `json:"index"`
+		URL   string `json:"url"`
+	}
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&list); err != nil {
+		t.Fatalf("pages --json dash not valid JSON: %v\n%s", err, out)
+	}
+	if len(list) != 2 {
+		t.Errorf("pages --json dash should list exactly 2 pages, got %d: %s", len(list), out)
+	}
+	for _, e := range list {
+		if !strings.Contains(e.URL, "/dash-") {
+			t.Errorf("json filter leaked non-dash page: %+v", e)
+		}
+	}
+
+	// attach: unique pattern switches active page
+	out = runCLI("page", "dash-alpha")
+	if !strings.Contains(out, "Switched to") || !strings.Contains(out, "dash-alpha") {
+		t.Errorf("page dash-alpha should switch and name the page: %q", out)
+	}
+
+	// attach: ambiguous pattern attaches to FIRST and says how many more
+	out = runCLI("page", "dash-")
+	if !strings.Contains(out, "Switched to") {
+		t.Errorf("page dash- should switch: %q", out)
+	}
+	if !strings.Contains(out, "more pages match") {
+		t.Errorf("page dash- should announce ambiguity: %q", out)
+	}
+}
+
 func TestOpenReuseLive(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		args := os.Args
