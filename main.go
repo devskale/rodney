@@ -247,7 +247,7 @@ var commandUsage = map[string]string{
 	"sleep":          "rodney sleep <seconds>",
 	"screenshot":     "rodney screenshot [-w N] [-h N] [--full] [file]",
 	"screenshot-el":  "rodney screenshot-el <selector> [file]",
-	"start-video":    "rodney start-video",
+	"start-video":    "rodney start-video [--max-mib N]",
 	"stop-video":     "rodney stop-video [file]",
 	"pages":          "rodney pages [pattern] [--json]",
 	"page":           "rodney page <index|t:targetID|pattern>",
