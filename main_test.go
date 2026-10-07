@@ -63,7 +63,7 @@ func TestMain(m *testing.M) {
 	l := launcher.New().
 		Set("no-sandbox").
 		Set("disable-gpu").
-		Set("single-process").
+		Set("disable-features", "HistoryEmbeddings"). // CHECK-crash on text-heavy pages, see diskfull 2026-10-07
 		Headless(true).
 		Leakless(false).
 		UserDataDir(filepath.Join(testDataDir, "chrome-data"))
@@ -2213,7 +2213,7 @@ func TestStartVideo_SetsStateFlag(t *testing.T) {
 	}
 
 	// Call startVideo
-	if err := startVideo(); err != nil {
+	if err := startVideo(defaultVideoMaxMiB); err != nil {
 		t.Fatalf("startVideo failed: %v", err)
 	}
 
@@ -2250,9 +2250,127 @@ func TestStartVideo_ErrorsIfAlreadyRecording(t *testing.T) {
 	s := &State{DebugURL: "ws://fake", ChromePID: 99999, VideoRecording: true, VideoDir: "/tmp/fake"}
 	saveState(s)
 
-	err := startVideo()
+	err := startVideo(defaultVideoMaxMiB)
 	if err == nil {
 		t.Error("expected error when already recording")
+	}
+}
+
+func TestVideoMaxBytes(t *testing.T) {
+	if got := videoMaxBytes(0); got != 0 {
+		t.Errorf("videoMaxBytes(0) = %d, want 0 (unlimited)", got)
+	}
+	if got := videoMaxBytes(-5); got != 0 {
+		t.Errorf("videoMaxBytes(-5) = %d, want 0", got)
+	}
+	if got := videoMaxBytes(2048); got != 2048<<20 {
+		t.Errorf("videoMaxBytes(2048) = %d, want %d", got, 2048<<20)
+	}
+}
+
+func TestStartVideo_PersistsMaxBytes(t *testing.T) {
+	withTestStateDir(t)
+
+	s := &State{DebugURL: "ws://fake", ChromePID: 99999}
+	saveState(s)
+
+	if err := startVideo(64); err != nil {
+		t.Fatalf("startVideo failed: %v", err)
+	}
+	s2, err := loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.VideoMaxBytes != 64<<20 {
+		t.Errorf("expected persisted cap %d, got %d", 64<<20, s2.VideoMaxBytes)
+	}
+	if !s2.VideoRecording {
+		t.Error("expected VideoRecording=true")
+	}
+}
+
+func TestStartVideo_ZeroMeansUnlimited(t *testing.T) {
+	withTestStateDir(t)
+
+	s := &State{DebugURL: "ws://fake", ChromePID: 99999}
+	saveState(s)
+
+	if err := startVideo(0); err != nil {
+		t.Fatalf("startVideo failed: %v", err)
+	}
+	s2, _ := loadState()
+	if s2.VideoMaxBytes != 0 {
+		t.Errorf("expected cap 0 (unlimited), got %d", s2.VideoMaxBytes)
+	}
+}
+
+func TestSumFrameBytes(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "frame_000000.jpeg"), make([]byte, 100), 0644)
+	os.WriteFile(filepath.Join(dir, "frame_000001.jpeg"), make([]byte, 250), 0644)
+	os.WriteFile(filepath.Join(dir, "meta.jsonl"), []byte("junk"), 0644)
+	os.WriteFile(filepath.Join(dir, "CAPPED"), []byte("junk"), 0644)
+
+	if got := sumFrameBytes(dir); got != 350 {
+		t.Errorf("sumFrameBytes = %d, want 350 (only frame_*.jpeg count)", got)
+	}
+}
+
+func TestCapMarkerRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := readCapMarker(dir); ok {
+		t.Error("expected ok=false when no marker exists")
+	}
+	writeCapMarker(dir, 12345)
+	total, ok := readCapMarker(dir)
+	if !ok || total != 12345 {
+		t.Errorf("readCapMarker = (%d, %v), want (12345, true)", total, ok)
+	}
+}
+
+func TestVideoCapture_StopsAtCap(t *testing.T) {
+	dir := withTestStateDir(t)
+	framesDir := filepath.Join(dir, "video-frames")
+	os.MkdirAll(framesDir, 0755)
+
+	// Seed with an existing 100 KiB frame so the cap is nearly exhausted
+	// (also proves the seed spans invocations: existing bytes count).
+	os.WriteFile(filepath.Join(framesDir, "frame_000000.jpeg"), make([]byte, 100<<10), 0644)
+
+	// Animated page so screencast emits frames
+	page := navigateTo(t, "/animated")
+
+	// Cap 110 KiB: seed is 100 KiB, so the first real frame must tip over it
+	stop := startVideoCapture(page, framesDir, 110<<10)
+	defer stop()
+
+	// Marker must appear once the cap hits
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := readCapMarker(framesDir); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("CAPPED marker never appeared within 5s")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	total, ok := readCapMarker(framesDir)
+	if !ok {
+		t.Fatal("marker vanished")
+	}
+	if total < 110<<10 {
+		t.Errorf("marker total %d should be >= cap %d", total, 110<<10)
+	}
+
+	// Give the self-stop a moment, then verify frame growth has ceased
+	time.Sleep(300 * time.Millisecond)
+	n1 := countFrames(framesDir)
+	time.Sleep(300 * time.Millisecond)
+	n2 := countFrames(framesDir)
+	if n2 > n1 {
+		t.Errorf("frames still growing after cap: %d -> %d", n1, n2)
 	}
 }
 
@@ -2263,8 +2381,8 @@ func TestVideoCapture_RecordsFramesDuringPageUse(t *testing.T) {
 	// Navigate to a page with animation (generates continuous frames)
 	page := navigateTo(t, "/animated")
 
-	// Start video capture on this page
-	stop := startVideoCapture(page, framesDir)
+	// Start video capture on this page (0 = unlimited cap)
+	stop := startVideoCapture(page, framesDir, 0)
 
 	// Give screencast time to emit some frames
 	time.Sleep(1 * time.Second)
@@ -2323,12 +2441,12 @@ func TestVideoCapture_AccumulatesAcrossCalls(t *testing.T) {
 	page := navigateTo(t, "/animated")
 
 	// First capture session
-	stop1 := startVideoCapture(page, framesDir)
+	stop1 := startVideoCapture(page, framesDir, 0)
 	time.Sleep(500 * time.Millisecond)
 	n1 := stop1()
 
 	// Second capture session (should continue numbering)
-	stop2 := startVideoCapture(page, framesDir)
+	stop2 := startVideoCapture(page, framesDir, 0)
 	time.Sleep(500 * time.Millisecond)
 	n2 := stop2()
 
@@ -2412,7 +2530,7 @@ func TestAssembleVideo_ProducesMP4(t *testing.T) {
 
 	// Capture real frames from an animated page
 	page := navigateTo(t, "/animated")
-	stop := startVideoCapture(page, framesDir)
+	stop := startVideoCapture(page, framesDir, 0)
 	time.Sleep(1 * time.Second)
 	n := stop()
 
@@ -2487,7 +2605,7 @@ func TestStopVideo_ProducesMP4WhenFfmpegAvailable(t *testing.T) {
 
 	// Capture real frames from animated page
 	page := navigateTo(t, "/animated")
-	stop := startVideoCapture(page, framesDir)
+	stop := startVideoCapture(page, framesDir, 0)
 	time.Sleep(1 * time.Second)
 	stop()
 
@@ -2533,7 +2651,7 @@ func TestAssembleGIF_ProducesValidGIF(t *testing.T) {
 
 	// Capture real frames from animated page
 	page := navigateTo(t, "/animated")
-	stop := startVideoCapture(page, framesDir)
+	stop := startVideoCapture(page, framesDir, 0)
 	time.Sleep(1 * time.Second)
 	n := stop()
 
@@ -2582,7 +2700,7 @@ func TestAssembleGIF_DeduplicatesIdenticalFrames(t *testing.T) {
 	// Write identical JPEG frames to simulate duplicate screencast output
 	// Use a real JPEG from a page capture for realistic data
 	page := navigateTo(t, "/")
-	stop := startVideoCapture(page, framesDir)
+	stop := startVideoCapture(page, framesDir, 0)
 	time.Sleep(200 * time.Millisecond)
 	stop()
 
@@ -2624,7 +2742,7 @@ func TestAssembleGIF_DecodableWithStdlib(t *testing.T) {
 	framesDir := filepath.Join(dir, "video-frames")
 
 	page := navigateTo(t, "/animated")
-	stop := startVideoCapture(page, framesDir)
+	stop := startVideoCapture(page, framesDir, 0)
 	time.Sleep(1 * time.Second)
 	stop()
 
@@ -2706,7 +2824,7 @@ func TestStopVideo_MP4FallsBackToGIFWithoutFfmpeg(t *testing.T) {
 	framesDir := filepath.Join(dir, "video-frames")
 
 	page := navigateTo(t, "/animated")
-	stop := startVideoCapture(page, framesDir)
+	stop := startVideoCapture(page, framesDir, 0)
 	// Wait until at least one frame exists (blind sleeps flake under load)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -2754,7 +2872,7 @@ func TestStopVideo_DetectsGIFExtension(t *testing.T) {
 	framesDir := filepath.Join(dir, "video-frames")
 
 	page := navigateTo(t, "/animated")
-	stop := startVideoCapture(page, framesDir)
+	stop := startVideoCapture(page, framesDir, 0)
 	time.Sleep(1 * time.Second)
 	stop()
 
@@ -2999,19 +3117,19 @@ func TestURLPrefixMatch(t *testing.T) {
 		ok        bool
 	}{
 		// tier-2 positives: same origin, "/"-boundary prefix
-		{base + "/dash", base + "/dash", true},       // exact path is its own prefix
-		{base + "/dash", base + "/dash/ai", true},     // deeper page — the attach case
-		{base + "/dash/", base + "/dash/ai", true},    // trailing slash normalized
-		{base + "/dash", base + "/dash?x=1", true},    // query lives outside Path
-		{base + "/a/b", base + "/a/b/c/d", true},     // multi-segment
+		{base + "/dash", base + "/dash", true},     // exact path is its own prefix
+		{base + "/dash", base + "/dash/ai", true},  // deeper page — the attach case
+		{base + "/dash/", base + "/dash/ai", true}, // trailing slash normalized
+		{base + "/dash", base + "/dash?x=1", true}, // query lives outside Path
+		{base + "/a/b", base + "/a/b/c/d", true},   // multi-segment
 		// negatives
-		{base + "/dash", base + "/dashboard", false},            // no "/" boundary
-		{base, base + "/any", false},                              // bare origin never prefix-matches
-		{base + "/", base + "/any", false},                       // root path likewise
-		{base + "/dash", "http://h:9999/dash/ai", false},          // different port
-		{"https://h/dash", "http://h/dash/ai", false},             // different scheme
-		{base + "/dash", "http://evil/dash/ai", false},            // different host
-		{base + "/dash", base + "", false},                        // cur has no path
+		{base + "/dash", base + "/dashboard", false},     // no "/" boundary
+		{base, base + "/any", false},                     // bare origin never prefix-matches
+		{base + "/", base + "/any", false},               // root path likewise
+		{base + "/dash", "http://h:9999/dash/ai", false}, // different port
+		{"https://h/dash", "http://h/dash/ai", false},    // different scheme
+		{base + "/dash", "http://evil/dash/ai", false},   // different host
+		{base + "/dash", base + "", false},               // cur has no path
 	}
 	for _, c := range cases {
 		if got := urlPrefixMatch(c.want, c.cur); got != c.ok {
@@ -3031,13 +3149,13 @@ func TestPageMatches(t *testing.T) {
 		url, title, q string
 		ok            bool
 	}{
-		{"http://h/dashboard/ai", "AI", "dashboard", true},   // URL hit
+		{"http://h/dashboard/ai", "AI", "dashboard", true},      // URL hit
 		{"http://h/x", "Dashboard Settings", "dashboard", true}, // title hit
 		{"http://h/DASHBOARD", "", "dashboard", true},           // case-insensitive
 		{"http://h/dashboard", "", "DASHBOARD", true},           // either side
 		{"http://h/settings", "Backup", "dashboard", false},     // no hit
-		{"http://h/x", "y", "", true},                             // empty query = all
-		{"http://h/dashboard-x", "", "dashboard", true},          // loose: -x siblings match
+		{"http://h/x", "y", "", true},                           // empty query = all
+		{"http://h/dashboard-x", "", "dashboard", true},         // loose: -x siblings match
 	}
 	for _, c := range cases {
 		if got := pageMatches(c.url, c.title, c.q); got != c.ok {

@@ -42,7 +42,7 @@ var helpText string
 // version is the devskale fork version. Overridable via -ldflags "-X main.version=..."
 // for tagged releases, but the default keeps fork builds distinguishable from
 // upstream (which reports plain "dev").
-var version = "0.11.0" // devskale fork
+var version = "0.11.1" // devskale fork
 
 // scopeMode determines whether to use a local or global state directory.
 type scopeMode int
@@ -117,12 +117,13 @@ type State struct {
 	ProxyPort       int               `json:"proxy_port,omitempty"` // local port of auth proxy
 	VideoRecording  bool              `json:"video_recording,omitempty"`
 	VideoDir        string            `json:"video_dir,omitempty"`
-	ConsolePID      int               `json:"console_pid,omitempty"` // PID of background console collector
-	ConsoleLog      string            `json:"console_log,omitempty"` // path to console.jsonl buffer
-	RequestPID      int               `json:"request_pid,omitempty"` // PID of background request collector
-	RequestLog      string            `json:"request_log,omitempty"` // path to requests.jsonl buffer
-	Headers         map[string]string `json:"headers,omitempty"`     // extra HTTP headers applied to every request
-	ViewportW       int               `json:"viewport_w,omitempty"`  // persisted viewport (0 = default)
+	VideoMaxBytes   int64             `json:"video_max_bytes,omitempty"` // fork(skale): frame-byte cap for active recording (0 = unlimited)
+	ConsolePID      int               `json:"console_pid,omitempty"`     // PID of background console collector
+	ConsoleLog      string            `json:"console_log,omitempty"`     // path to console.jsonl buffer
+	RequestPID      int               `json:"request_pid,omitempty"`     // PID of background request collector
+	RequestLog      string            `json:"request_log,omitempty"`     // path to requests.jsonl buffer
+	Headers         map[string]string `json:"headers,omitempty"`         // extra HTTP headers applied to every request
+	ViewportW       int               `json:"viewport_w,omitempty"`      // persisted viewport (0 = default)
 	ViewportH       int               `json:"viewport_h,omitempty"`
 	DeviceName      string            `json:"device_name,omitempty"` // persisted device emulation preset
 	DeviceLandscape bool              `json:"device_landscape,omitempty"`
@@ -409,8 +410,8 @@ var commandHelp = map[string]cmdHelpEntry{
 		Desc: "Screenshot a single element.", Examples: []string{"rodney screenshot-el \"#chart\""}},
 
 	// --- Video recording ---
-	"start-video": {Group: "Video recording", Usage: "rodney start-video",
-		Desc: "Start recording the page as video frames (saved on stop-video).", Examples: []string{"rodney start-video"}},
+	"start-video": {Group: "Video recording", Usage: "rodney start-video [--max-mib N]",
+		Desc: "Start recording the page as video frames (saved on stop-video). Caps total frame bytes at N MiB (default 2048; 0 = unlimited).", Examples: []string{"rodney start-video", "rodney start-video --max-mib 512"}},
 	"stop-video": {Group: "Video recording", Usage: "rodney stop-video [file]",
 		Desc: "Stop recording and save. .gif by default; .mp4 requires ffmpeg in PATH.", Examples: []string{"rodney stop-video demo.gif"}},
 
@@ -939,7 +940,7 @@ func maybeStartVideoCapture(page *rod.Page) func() {
 	if err != nil || !s.VideoRecording || s.VideoDir == "" {
 		return func() {}
 	}
-	stop := startVideoCapture(page, s.VideoDir)
+	stop := startVideoCapture(page, s.VideoDir, s.VideoMaxBytes)
 	return func() { stop() }
 }
 
@@ -1048,10 +1049,23 @@ func cmdStart(args []string) {
 	l := launcher.New().
 		Set("no-sandbox").
 		Set("disable-gpu").
-		Set("single-process"). // Required for screenshots in gVisor/container environments
-		Leakless(false).       // Keep Chrome alive after CLI exits
+		// Chromium's on-device AI history-embeddings model crashes the whole
+		// browser (CHECK failure in HistoryEmbeddingsService::
+		// OnPassagesEmbeddingsComputed → SIGABRT) on text-heavy pages with the
+		// pinned chromium build. Disable the feature entirely for automation.
+		Set("disable-features", "HistoryEmbeddings").
+		Leakless(false). // Keep Chrome alive after CLI exits
 		UserDataDir(dataDir).
 		Headless(headless)
+
+	// --single-process is only required for screenshots in gVisor/container
+	// environments. On normal hosts it makes Chromium unstable (SIGABRT on
+	// complex pages) and every crash produces a giant core dump (1.2 TB VSZ
+	// address space) — see diskfull investigation 2026-10-07.
+	// Opt in with RODNEY_SINGLE_PROCESS=1.
+	if os.Getenv("RODNEY_SINGLE_PROCESS") != "" {
+		l = l.Set("single-process")
+	}
 
 	// When in non-headless mode, make sure that we show the startup window immediately
 	// (instead of showing a window only after calling "rodney open")
@@ -2408,8 +2422,63 @@ func cmdScreenshotEl(args []string) {
 
 // --- Video recording ---
 
+// fork(skale): recording disk cap ------------------------------------------------
+// Frames accumulate on disk for as long as a recording stays active across CLI
+// invocations (capture re-attaches on every command) — an unattended recording
+// can fill the disk (ENOSPC incident 2026-10-07). start-video therefore caps
+// total frame bytes (default 2 GiB, --max-mib to override, 0 = unlimited).
+// When the cap hits, capture stops and a CAPPED marker is written into the
+// frames dir so stop-video can report it.
+
+const defaultVideoMaxMiB = 2048
+
+const videoCapMarkerFile = "CAPPED"
+
+// videoMaxBytes converts a MiB limit to bytes; <= 0 means unlimited.
+func videoMaxBytes(mib int) int64 {
+	if mib <= 0 {
+		return 0
+	}
+	return int64(mib) << 20
+}
+
+// sumFrameBytes totals existing frame_*.jpeg sizes in dir.
+func sumFrameBytes(dir string) int64 {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "frame_") && strings.HasSuffix(e.Name(), ".jpeg") {
+			if info, err := e.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+	}
+	return total
+}
+
+// writeCapMarker records that the frame cap was hit (bytes total).
+func writeCapMarker(dir string, total int64) {
+	os.WriteFile(filepath.Join(dir, videoCapMarkerFile), []byte(fmt.Sprintf("%d\n", total)), 0644)
+}
+
+// readCapMarker returns the total frame bytes at cap time, or ok=false.
+func readCapMarker(dir string) (total int64, ok bool) {
+	data, err := os.ReadFile(filepath.Join(dir, videoCapMarkerFile))
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 // startVideo enables video recording: sets state flag and creates frames dir.
-func startVideo() error {
+func startVideo(maxMiB int) error {
 	s, err := loadState()
 	if err != nil {
 		return err
@@ -2422,14 +2491,25 @@ func startVideo() error {
 		return fmt.Errorf("failed to create video dir: %w", err)
 	}
 	s.VideoRecording = true
+	s.VideoMaxBytes = videoMaxBytes(maxMiB) // fork(skale): 0 = unlimited
 	return saveState(s)
 }
 
 func cmdStartVideo(args []string) {
-	if err := startVideo(); err != nil {
+	fs := flag.NewFlagSet("start-video", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	maxMiB := fs.Int("max-mib", defaultVideoMaxMiB, "cap total frame bytes in MiB (0 = unlimited)")
+	if err := fs.Parse(args); err != nil {
 		fatal("%v", err)
 	}
-	fmt.Println("Video recording started")
+	if err := startVideo(*maxMiB); err != nil {
+		fatal("%v", err)
+	}
+	if *maxMiB > 0 {
+		fmt.Printf("Video recording started (cap: %d MiB)\n", *maxMiB)
+	} else {
+		fmt.Println("Video recording started (no cap)")
+	}
 }
 
 // VideoResult holds the result of stop-video.
@@ -2438,6 +2518,9 @@ type VideoResult struct {
 	UniqueFrames   int    // for GIF: frames after deduplication
 	OutputFile     string // empty if assembly failed
 	FallbackFormat bool   // true if fell back to GIF because ffmpeg was unavailable
+	Capped         bool   // fork(skale): recording hit the frame-byte cap
+	CappedBytes    int64  // total frame bytes when the cap hit
+	CapLimit       int64  // effective cap in bytes (0 = unlimited)
 }
 
 // stopVideo stops recording, optionally assembles video, clears state.
@@ -2454,6 +2537,13 @@ func stopVideo(outputFile string) (*VideoResult, error) {
 	frameCount := countFrames(framesDir)
 
 	result := &VideoResult{FrameCount: frameCount}
+
+	// fork(skale): report whether the recording hit the frame cap
+	if cappedBytes, wasCapped := readCapMarker(framesDir); wasCapped {
+		result.Capped = true
+		result.CappedBytes = cappedBytes
+	}
+	result.CapLimit = s.VideoMaxBytes
 
 	// Assemble output if we have frames
 	if frameCount > 0 && outputFile != "" {
@@ -2507,6 +2597,10 @@ func cmdStopVideo(args []string) {
 	if result.OutputFile != "" {
 		if result.FallbackFormat {
 			fmt.Fprintf(os.Stderr, "ffmpeg not found, saving as GIF instead\n")
+		}
+		if result.Capped { // fork(skale): cap was hit during capture
+			fmt.Fprintf(os.Stderr, "recording hit the %d MiB frame cap (%d bytes) — output contains frames up to the cap\n",
+				result.CapLimit>>20, result.CappedBytes)
 		}
 		if result.UniqueFrames > 0 && result.UniqueFrames < result.FrameCount {
 			fmt.Printf("Saved %s (%d frames, %d unique)\n", result.OutputFile, result.FrameCount, result.UniqueFrames)
@@ -2748,14 +2842,21 @@ func assembleGIF(framesDir, outputFile string) (*GIFResult, error) {
 // startVideoCapture begins CDP screencast on the given page, writing JPEG frames
 // and metadata to framesDir. It returns a stop function that stops the screencast
 // and returns the number of frames captured in this session.
-func startVideoCapture(page *rod.Page, framesDir string) (stop func() int) {
+// fork(skale): maxBytes caps total frame bytes (seeded with existing frames so
+// the cap holds across CLI invocations); 0 = unlimited. On cap hit the capture
+// stops itself and a CAPPED marker is left in framesDir for stop-video.
+func startVideoCapture(page *rod.Page, framesDir string, maxBytes int64) (stop func() int) {
 	os.MkdirAll(framesDir, 0755)
 
 	// Count existing frames to continue numbering
 	startIdx := countFrames(framesDir)
+	// Seed the byte counter with existing frames (cap spans invocations)
+	seed := sumFrameBytes(framesDir)
 
 	var mu sync.Mutex
 	captured := 0
+	var written int64
+	var capped bool
 
 	// Open metadata file for appending
 	metaPath := filepath.Join(framesDir, "meta.jsonl")
@@ -2767,6 +2868,19 @@ func startVideoCapture(page *rod.Page, framesDir string) (stop func() int) {
 
 	done := make(chan struct{})
 
+	var stopOnce sync.Once
+	stopInternal := func() {
+		stopOnce.Do(func() {
+			proto.PageStopScreencast{}.Call(page)
+			close(done)
+			// Give in-flight frames a moment to flush
+			time.Sleep(50 * time.Millisecond)
+			if metaFile != nil {
+				metaFile.Close()
+			}
+		})
+	}
+
 	go page.EachEvent(func(e *proto.PageScreencastFrame) bool {
 		select {
 		case <-done:
@@ -2775,6 +2889,10 @@ func startVideoCapture(page *rod.Page, framesDir string) (stop func() int) {
 		}
 
 		mu.Lock()
+		if capped { // already over the cap — unsubscribe
+			mu.Unlock()
+			return true
+		}
 		idx := startIdx + captured
 		captured++
 		mu.Unlock()
@@ -2787,6 +2905,20 @@ func startVideoCapture(page *rod.Page, framesDir string) (stop func() int) {
 			mu.Lock()
 			metaFile.WriteString(line)
 			mu.Unlock()
+		}
+
+		// fork(skale): enforce the frame-byte cap
+		mu.Lock()
+		written += int64(len(e.Data))
+		over := maxBytes > 0 && seed+written > maxBytes
+		if over {
+			capped = true
+		}
+		total := seed + written
+		mu.Unlock()
+		if over {
+			writeCapMarker(framesDir, total)
+			go stopInternal() // stop screencast without blocking the event loop
 		}
 
 		proto.PageScreencastFrameAck{SessionID: e.SessionID}.Call(page)
@@ -2802,13 +2934,7 @@ func startVideoCapture(page *rod.Page, framesDir string) (stop func() int) {
 	}.Call(page)
 
 	return func() int {
-		proto.PageStopScreencast{}.Call(page)
-		close(done)
-		// Give in-flight frames a moment to flush
-		time.Sleep(50 * time.Millisecond)
-		if metaFile != nil {
-			metaFile.Close()
-		}
+		stopInternal()
 		mu.Lock()
 		defer mu.Unlock()
 		return captured
