@@ -60,3 +60,19 @@ Decision logic lives in the pure `ttlExpired(startedAt, now, ttlHours)` — unit
 tests cover disabled / unknown-age / fresh / boundary / clock-skew. The live
 behaviour (fresh survives, old-live killed, global session intact) is verified
 end-to-end in a sandboxed `HOME` with real sleeping PIDs.
+
+## Gotchas
+
+See [README.md#gotchas](README.md#gotchas) and
+[notes.md#incident-diskfull](notes.md#incident-diskfull) for load-bearing traps.
+
+- **`--single-process`** — removed by default in 0.11.1. Was causing SIGABRT
+  crash loops that produced ~1.2 TB core dumps per crash and filled the disk
+  in seconds. Only opt in via `RODNEY_SINGLE_PROCESS=1` for gVisor/container
+  environments.
+- **`--disable-features=HistoryEmbeddings`** — pinned Chromium's on-device AI
+  history-embeddings model CHECK-fails on text-heavy pages. Always present on
+  launch.
+- **Video recording disk cap** — `start-video` caps total frame bytes (default
+  2 GiB, `--max-mib` to override, 0 = unlimited). Frames accumulate across
+  CLI invocations; unattended recordings hit the cap and self-stop.
