@@ -614,6 +614,22 @@ The tool uses the [rod](https://github.com/go-rod/rod) Go library which communic
 | `mock` | `<pattern> <response> [--status N] [--type MIME] [--method M]` | Serve canned response for matching requests (persistent) |
 | `block` | `<pattern> [--method M]` | Fail matching requests client-side (persistent) |
 
+### Gotchas
+
+**Chromium `--single-process` → disk-filling crash loop (v0.11.0).**  The old
+`--single-process` flag made Chromium unstable on complex/text-heavy pages
+(SIGABRT in the pinned build) — every crash produced a ~1.2-TB VSZ core dump
+via `systemd-coredump`, filling the disk in seconds. **Since 0.11.1** this flag
+is removed by default; opt in with `RODNEY_SINGLE_PROCESS=1` if you need it
+(gVisor/container environments). The fix also disables Chromium's
+`HistoryEmbeddings` on-device AI feature which CHECK-fails on text-heavy
+pages.  See commit `6d6ba90` (disk-safety) in this repo.
+
+**Video recording fills disk on long captures.**  Video frames accumulate across
+CLI invocations (capture re-attaches). **Since 0.11.1** `start-video` caps total
+frame bytes at 2 GiB by default (`--max-mib 2048`; 0 = unlimited). When the cap
+is hit, capture stops itself and `stop-video` reports the `CAPPED` marker.
+
 ### Global flags
 
 | Flag | Description |

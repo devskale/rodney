@@ -109,3 +109,22 @@ This is much simpler than a daemon architecture while still providing statefulne
 - No request interception/network monitoring
 - No file upload support
 - Could add `--json` output mode for programmatic use
+
+### Incident: diskfull (2026-10-07, v0.11.0 → v0.11.1)
+
+**What happened:**  The `--single-process` Chrome flag made the pinned
+Chromium build crash-prone (SIGABRT on complex/text-heavy pages).  Each crash
+produced a ~1.2-TB VSZ core dump via `systemd-coredump` — the disk filled in
+seconds, taking down the whole system.
+
+**Fix (commit `6d6ba90`, v0.11.1 disk-safety):**
+
+- Removed `--single-process` by default; opt-in via `RODNEY_SINGLE_PROCESS=1`
+- Added `--disable-features=HistoryEmbeddings` (Chromium's on-device AI
+  history-embeddings model CHECK-fails on text-heavy pages in the pinned build)
+- Video recording: `start-video` now caps total frame bytes (default 2 GiB,
+  `--max-mib` to override, 0 = unlimited). Self-stops at cap, writes CAPPED
+  marker; `stop-video` reports it. Defense-in-depth for unattended recordings
+  across CLI invocations.
+
+See `~/code/non/diskfull/FINDINGS.md` for full investigation notes.
