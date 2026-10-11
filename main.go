@@ -42,12 +42,26 @@ var helpText string
 // version is the devskale fork version. Overridable via -ldflags "-X main.version=..."
 // for tagged releases, but the default keeps fork builds distinguishable from
 // upstream (which reports plain "dev").
-var version = "0.11.2" // devskale fork
+var version = "0.11.3" // devskale fork
 
 // scopeMode determines whether to use a local or global state directory.
 type scopeMode int
 
 const (
+	// orphanTTLHours is how long a session browser may live before the GC sweeps
+	// it, even while its PID is still alive. The gap this closes: a Chrome that
+	// hung (never answers the debug port, never exits) keeps a valid state.json,
+	// so the old sweep — which only killed PIDs not referenced by any state —
+	// protected it forever. 24h covers "I left a session open overnight" without
+	// touching a working day-long session. Override: RODNEY_ORPHAN_TTL_HOURS=0
+	// disables the age sweep entirely (PID-based sweep still runs).
+	orphanTTLHours = 24
+	// maxSessions caps concurrent named sessions (~/.rodney-sessions/*). Beyond
+	// it `start` refuses and tells you what to stop — each session is a Chromium
+	// at 100-500 MB RAM, and unbounded parallel sessions are how a machine ends
+	// up with 8 headless browsers nobody remembers launching.
+	// Override: RODNEY_MAX_SESSIONS=0 disables the cap.
+	maxSessions = 6
 	scopeAuto   scopeMode = iota // auto-detect: local if .rodney/state.json exists in cwd, else global
 	scopeLocal                   // force local (./.rodney/)
 	scopeGlobal                  // force global (~/.rodney/)
@@ -111,6 +125,12 @@ func resolveStateDir(mode scopeMode, workingDir string) string {
 type State struct {
 	DebugURL        string            `json:"debug_url"`
 	ChromePID       int               `json:"chrome_pid"`
+	// StartedAt is the unix-second timestamp of the launch that created this
+	// state. It is the anchor for the orphan TTL: a browser whose state is older
+	// than the TTL is swept even when its PID is still alive (a hung Chrome that
+	// never answers the debug port holds 100-500 MB forever). 0 = unknown (state
+	// written by an older rodney) → treated as "no TTL", never swept on age.
+	StartedAt       int64             `json:"started_at,omitempty"`
 	ActivePage      int               `json:"active_page"` // index into pages list
 	DataDir         string            `json:"data_dir"`
 	ProxyPID        int               `json:"proxy_pid,omitempty"`  // PID of auth proxy helper
@@ -133,6 +153,12 @@ type State struct {
 
 // stateDirOverride allows tests to redirect state to a temp dir
 var stateDirOverride string
+
+// homeDir returns the user home dir, or "" when unknown (tests run without one).
+func homeDir() string {
+	home, _ := os.UserHomeDir()
+	return home
+}
 
 func stateDir() string {
 	if stateDirOverride != "" {
@@ -200,6 +226,23 @@ func removeState() {
 // state file) and never removes an incognito temp dir of a running browser.
 // Non-interactive, best-effort: failures are reported to stderr but never
 // abort the start.
+// ttlExpired reports whether a session started at `startedAt` (unix seconds) is
+// older than the TTL. Rules, in order:
+//   - ttlHours <= 0            → never expired (feature disabled)
+//   - startedAt <= 0           → never expired (state written by an older rodney
+//     that did not record a start time; we must not guess and kill a live session)
+//   - now <= startedAt         → not expired (clock skew / future timestamp)
+//   - otherwise                → age >= ttl
+func ttlExpired(startedAt, now int64, ttlHours int) bool {
+	if ttlHours <= 0 || startedAt <= 0 {
+		return false
+	}
+	if now <= startedAt {
+		return false
+	}
+	return now-startedAt >= int64(ttlHours)*3600
+}
+
 func sweepOrphans() {
 	// Gather every chrome_pid referenced by a live state file (own session,
 	// other named sessions, local ./.rodney) — the protected set.
@@ -223,6 +266,41 @@ func sweepOrphans() {
 			if proc, err := os.FindProcess(s.ChromePID); err == nil && proc.Signal(syscall.Signal(0)) == nil {
 				protected[s.ChromePID] = true
 			}
+		}
+	}
+
+	// Age pass: a browser older than the TTL is swept even though it is alive and
+	// referenced by a state file. This is the hung-Chrome case the PID pass cannot
+	// see — a live PID with a valid state.json was protected forever before.
+	ttlHours := orphanTTLHours
+	if v := os.Getenv("RODNEY_ORPHAN_TTL_HOURS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			ttlHours = n
+		}
+	}
+	if ttlHours > 0 {
+		now := time.Now().Unix()
+		for _, dir := range stateDirs {
+			sp := filepath.Join(dir, "state.json")
+			data, err := os.ReadFile(sp)
+			if err != nil {
+				continue
+			}
+			var s State
+			if json.Unmarshal(data, &s) != nil || s.ChromePID <= 0 {
+				continue
+			}
+			if !ttlExpired(s.StartedAt, now, ttlHours) {
+				continue
+			}
+			// Expired: kill the browser (if still alive) and drop the state.
+			if proc, err := os.FindProcess(s.ChromePID); err == nil && proc.Signal(syscall.Signal(0)) == nil {
+				_ = proc.Signal(syscall.SIGKILL)
+				fmt.Fprintf(os.Stderr, "gc: session %s exceeded the %dh TTL (started %s) — killed PID %d\n",
+					filepath.Base(dir), ttlHours, time.Unix(s.StartedAt, 0).Format("2006-01-02 15:04"), s.ChromePID)
+			}
+			delete(protected, s.ChromePID)
+			_ = os.Remove(sp)
 		}
 	}
 
@@ -1172,8 +1250,33 @@ func cmdStart(args []string) {
 	// crash): every orphan is a headless Chromium eating RAM (100-500 MB) and
 	// disk (profile). Runs on every start — no daemon, no cron; the next start
 	// is the natural collection point. Never touches a browser referenced by
-	// a live state.json (own or other sessions').
+	// a live state.json (own or other sessions') — except by TTL, see below.
 	sweepOrphans()
+
+	// Session cap (fork skale): each named session is a full Chromium at
+	// 100-500 MB. Without a cap, `--session x start` in a loop is how a machine
+	// ends up with a dozen headless browsers nobody remembers launching. The cap
+	// counts EXISTING sessions (not the one about to start) and refuses with the
+	// names to stop — actionable, not just an error. RODNEY_MAX_SESSIONS=0
+	// disables it.
+	maxSess := maxSessions
+	if v := os.Getenv("RODNEY_MAX_SESSIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			maxSess = n
+		}
+	}
+	if maxSess > 0 && sessionName != "" {
+		if existing, _ := filepath.Glob(filepath.Join(homeDir(), ".rodney-sessions", "*")); len(existing) >= maxSess {
+			var names []string
+			for _, d := range existing {
+				if _, err := os.Stat(filepath.Join(d, "state.json")); err == nil {
+					names = append(names, filepath.Base(d))
+				}
+			}
+			fatal("refusing to start session %q: %d of %d session slots in use (%s). Stop one first: rodney --session <name> stop — or raise the cap: RODNEY_MAX_SESSIONS=%d",
+				sessionName, len(names), maxSess, strings.Join(names, ", "), maxSess+1)
+		}
+	}
 
 	// Check if already running
 	if s, err := loadState(); err == nil {
@@ -1272,6 +1375,7 @@ func cmdStart(args []string) {
 	state := &State{
 		DebugURL:   debugURL,
 		ChromePID:  pid,
+		StartedAt:  time.Now().Unix(),
 		ActivePage: 0,
 		DataDir:    dataDir,
 		ProxyPID:   proxyPID,

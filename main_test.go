@@ -4517,3 +4517,118 @@ func TestSweepOrphans_ProtectsLiveSessionState(t *testing.T) {
 		t.Error("sweep kept a STALE session state (chrome_pid dead) — should have been removed")
 	}
 }
+
+// ── Orphan TTL (fork skale, 2026-10-11) ───────────────────────────────────────
+//
+// The gap this closes: a Chrome that hung (never answers the debug port, never
+// exits) keeps a valid state.json, so the PID-based sweep — which only killed
+// PIDs no state file referenced — protected it forever. The age pass sweeps a
+// browser older than the TTL even while it is alive.
+
+func TestTTLExpired_DisabledByZero(t *testing.T) {
+	now := time.Now().Unix()
+	// ttlHours = 0 → feature off, nothing ever expires
+	if ttlExpired(now-999999, now, 0) {
+		t.Error("ttlHours=0 must never expire (feature disabled)")
+	}
+}
+
+func TestTTLExpired_UnknownAgeNeverSweeps(t *testing.T) {
+	now := time.Now().Unix()
+	// A state written by an older rodney has StartedAt=0. Guessing its age and
+	// killing a live browser is the worst outcome — never sweep on unknown age.
+	if ttlExpired(0, now, 24) {
+		t.Error("StartedAt=0 (unknown age) must never expire")
+	}
+	if ttlExpired(-1, now, 1) {
+		t.Error("negative StartedAt must never expire")
+	}
+}
+
+func TestTTLExpired_FreshSessionSurvives(t *testing.T) {
+	now := time.Now().Unix()
+	if ttlExpired(now-60, now, 24) {
+		t.Error("a 60s-old session must not expire under a 24h TTL")
+	}
+	if ttlExpired(now-int64(23*3600), now, 24) {
+		t.Error("a 23h-old session must not expire under a 24h TTL")
+	}
+}
+
+func TestTTLExpired_OldSessionSweeps(t *testing.T) {
+	now := time.Now().Unix()
+	if !ttlExpired(now-int64(25*3600), now, 24) {
+		t.Error("a 25h-old session must expire under a 24h TTL")
+	}
+	// exactly at the boundary counts as expired
+	if !ttlExpired(now-int64(24*3600), now, 24) {
+		t.Error("a session exactly at the TTL boundary must expire")
+	}
+}
+
+func TestTTLExpired_ClockSkewSurvives(t *testing.T) {
+	now := time.Now().Unix()
+	// A state file from the future (clock skew, or a copied profile) must not be
+	// swept — now <= startedAt is not expired.
+	if ttlExpired(now+3600, now, 24) {
+		t.Error("a future StartedAt must not expire (clock skew)")
+	}
+	if ttlExpired(now, now, 24) {
+		t.Error("StartedAt == now must not expire")
+	}
+}
+
+func TestTTLExpired_ShortTTLForTests(t *testing.T) {
+	now := time.Now().Unix()
+	// A 1h TTL (the practical test setting) sweeps a 2h-old session and keeps a
+	// 30-minute-old one.
+	if !ttlExpired(now-7200, now, 1) {
+		t.Error("a 2h-old session must expire under a 1h TTL")
+	}
+	if ttlExpired(now-1800, now, 1) {
+		t.Error("a 30min-old session must survive a 1h TTL")
+	}
+}
+
+func TestState_RoundTripsStartedAt(t *testing.T) {
+	dir := withTestStateDir(t)
+	now := time.Now().Unix()
+	if err := saveState(&State{DebugURL: "ws://x", ChromePID: 1234, StartedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StartedAt != now {
+		t.Errorf("StartedAt not persisted: got %d want %d", got.StartedAt, now)
+	}
+	// The field must be on disk under the documented JSON key (ops reads state.json).
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"started_at"`) {
+		t.Errorf("state.json lacks the started_at key: %s", raw)
+	}
+}
+
+func TestState_OlderStateWithoutStartedAtStillLoads(t *testing.T) {
+	dir := withTestStateDir(t)
+	// A state.json written by rodney < 0.11.3 has no started_at — it must load
+	// cleanly (StartedAt=0) so the TTL simply never applies to it.
+	legacy := `{"debug_url":"ws://x","chrome_pid":1234,"active_page":0,"data_dir":"/tmp/d"}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadState()
+	if err != nil {
+		t.Fatalf("legacy state must load: %v", err)
+	}
+	if got.StartedAt != 0 {
+		t.Errorf("legacy state should have StartedAt=0, got %d", got.StartedAt)
+	}
+	if ttlExpired(got.StartedAt, time.Now().Unix(), 24) {
+		t.Error("legacy state (unknown age) must never be swept by age")
+	}
+}

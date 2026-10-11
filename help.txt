@@ -3,7 +3,11 @@ rodney - Chrome automation from the command line
 Browser lifecycle:
   rodney start [--show] [--insecure|-k] [--incognito]
                                   Launch Chrome (--show visible, --incognito uses a
-                                  throwaway profile deleted on stop)
+                                  throwaway profile deleted on stop). Every start
+                                  sweeps orphans: browsers no state file references,
+                                  plus sessions older than RODNEY_ORPHAN_TTL_HOURS
+                                  (default 24h, 0 disables). Named sessions are
+                                  capped at RODNEY_MAX_SESSIONS (default 6, 0 disables).
   rodney connect <host:port>      Connect to existing Chrome on remote debug port
   rodney stop                     Shut down Chrome
   rodney status                   Show browser status

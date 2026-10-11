@@ -39,3 +39,24 @@ re-enable them. The local guardrail replaces them — **depth ladder, fast by de
 - Upstream: `origin` (simonw/rodney). This fork: `fork` remote, branch `skale`.
   Rebase on upstream occasionally; keep fork-specific changes minimal and
   clearly marked.
+
+## Orphan GC: TTL + session cap (2026-10-11, v0.11.3)
+
+`sweepOrphans()` runs on every `start`. Two passes:
+
+1. **PID pass** (original): kill rod-family Chromium whose PID is referenced by
+   no live `state.json`. Catches hard-killed runs.
+2. **Age pass** (v0.11.3): kill a browser **older than the TTL even while its
+   PID is alive and its state is valid**. This is the hung-Chrome case the PID
+   pass structurally cannot see — it protected it forever. Anchored on
+   `State.StartedAt` (unix seconds, set at launch). `StartedAt <= 0` (state from
+   an older rodney) is never swept by age — unknown age must not mean death.
+
+Knobs: `RODNEY_ORPHAN_TTL_HOURS` (default 24, `0` disables),
+`RODNEY_MAX_SESSIONS` (default 6, `0` disables). The cap counts existing named
+sessions and refuses with the names to stop.
+
+Decision logic lives in the pure `ttlExpired(startedAt, now, ttlHours)` — unit
+tests cover disabled / unknown-age / fresh / boundary / clock-skew. The live
+behaviour (fresh survives, old-live killed, global session intact) is verified
+end-to-end in a sandboxed `HOME` with real sleeping PIDs.
