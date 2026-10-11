@@ -4464,3 +4464,56 @@ func TestTapFiresPointerEvents(t *testing.T) {
 		t.Error("tap did not fire pointerdown")
 	}
 }
+
+// ── sweepOrphans (fork skale): start-time GC ──────────────────────────────
+
+func TestListRodProcesses_FiltersByUserDataDir(t *testing.T) {
+	// listRodProcesses must only return processes whose user-data-dir marks
+	// them as rod-family: a .rodney session dir or the rod-managed binary.
+	// We can't easily spawn a real browser per unit test, but we can verify
+	// the filter logic against our own process list: this test binary's own
+	// cmdline must never match (no user-data-dir in it).
+	for _, p := range listRodProcesses() {
+		if strings.Contains(p.cmd, "go-build") && strings.Contains(p.cmd, "main.test") {
+			t.Fatalf("test binary itself matched as rod-family: %s", p.cmd)
+		}
+	}
+}
+
+func TestSweepOrphans_ProtectsLiveSessionState(t *testing.T) {
+	// sweepOrphans must never remove a state.json whose chrome_pid is alive,
+	// and must remove state.json whose chrome_pid is dead. Sessions live under
+	// $HOME/.rodney-sessions/<name>/ — mirror that layout in a temp HOME.
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, ".rodney-sessions")
+
+	// Stale: references a PID that cannot exist.
+	staleDir := filepath.Join(sessionsDir, "stale-session")
+	if err := os.MkdirAll(staleDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	staleState := `{"debug_url":"ws://127.0.0.1:1/x","chrome_pid":99999999}`
+	if err := os.WriteFile(filepath.Join(staleDir, "state.json"), []byte(staleState), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Live: references our own PID (alive by definition).
+	liveDir := filepath.Join(sessionsDir, "live-session")
+	if err := os.MkdirAll(liveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	liveState := fmt.Sprintf(`{"debug_url":"ws://127.0.0.1:1/x","chrome_pid":%d}`, os.Getpid())
+	if err := os.WriteFile(filepath.Join(liveDir, "state.json"), []byte(liveState), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", dir)
+	sweepOrphans()
+
+	if _, err := os.Stat(filepath.Join(liveDir, "state.json")); err != nil {
+		t.Error("sweep removed a LIVE session state (chrome_pid alive) — must never happen")
+	}
+	if _, err := os.Stat(filepath.Join(staleDir, "state.json")); err == nil {
+		t.Error("sweep kept a STALE session state (chrome_pid dead) — should have been removed")
+	}
+}

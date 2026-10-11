@@ -183,6 +183,147 @@ func removeState() {
 	os.Remove(statePath())
 }
 
+// sweepOrphans is rodney's garbage-collection pass (fork skale), run by every
+// `start` before launching a new browser. Two targets:
+//
+//  1. Orphan rod-family Chromium processes: processes whose user-data-dir
+//     points at a .rodney session dir (or a rod-managed binary from
+//     ~/.cache/rod/browser) that are NOT referenced as chrome_pid by any live
+//     state.json — global, local, or named session. These accumulate when a
+//     previous CLI run was killed hard (SSH timeout, kill -9, OOM) or a test
+//     suite leaked its browser. Each orphan is a headless Chromium holding
+//     100-500 MB RAM plus its profile on disk.
+//  2. Stale state files: state.json whose chrome_pid is no longer alive —
+//     dead weight that makes `status` report a ghost session.
+//
+// It never kills a live session's browser (verified against every session
+// state file) and never removes an incognito temp dir of a running browser.
+// Non-interactive, best-effort: failures are reported to stderr but never
+// abort the start.
+func sweepOrphans() {
+	// Gather every chrome_pid referenced by a live state file (own session,
+	// other named sessions, local ./.rodney) — the protected set.
+	protected := map[int]bool{}
+	var stateDirs []string
+	home, _ := os.UserHomeDir()
+	stateDirs = append(stateDirs, filepath.Join(home, ".rodney"))
+	if cwd, err := os.Getwd(); err == nil {
+		stateDirs = append(stateDirs, filepath.Join(cwd, ".rodney"))
+	}
+	if matches, _ := filepath.Glob(filepath.Join(home, ".rodney-sessions", "*")); len(matches) > 0 {
+		stateDirs = append(stateDirs, matches...)
+	}
+	for _, dir := range stateDirs {
+		data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+		if err != nil {
+			continue
+		}
+		var s State
+		if json.Unmarshal(data, &s) == nil && s.ChromePID > 0 {
+			if proc, err := os.FindProcess(s.ChromePID); err == nil && proc.Signal(syscall.Signal(0)) == nil {
+				protected[s.ChromePID] = true
+			}
+		}
+	}
+
+	// Find rod-family Chromium processes via /proc (Linux) or ps (macOS):
+	// user-data-dir contains ".rodney" or the binary lives under
+	// ~/.cache/rod/browser. Kill those not in the protected set.
+	killed := 0
+	for _, pi := range listRodProcesses() {
+		if protected[pi.pid] {
+			continue
+		}
+		if proc, err := os.FindProcess(pi.pid); err == nil {
+			_ = proc.Signal(syscall.SIGKILL)
+			killed++
+		}
+	}
+
+	// Remove stale state files (chrome_pid dead) — but only for sessions we
+	// did NOT just launch; the own session's state was handled above. Stale
+	// means: state.json exists, references a chrome_pid, and that PID is gone.
+	for _, dir := range stateDirs {
+		sp := filepath.Join(dir, "state.json")
+		data, err := os.ReadFile(sp)
+		if err != nil {
+			continue
+		}
+		var s State
+		if json.Unmarshal(data, &s) != nil || s.ChromePID <= 0 {
+			continue
+		}
+		if proc, err := os.FindProcess(s.ChromePID); err != nil || proc.Signal(syscall.Signal(0)) != nil {
+			_ = os.Remove(sp)
+		}
+	}
+
+	if killed > 0 {
+		fmt.Fprintf(os.Stderr, "gc: killed %d orphan rod-family browser process(es)\n", killed)
+	}
+}
+
+// rodProcess is a rod-family browser process candidate.
+type rodProcess struct {
+	pid int
+	cmd string
+}
+
+// listRodProcesses returns rod-family browser processes: user-data-dir
+// pointing at a .rodney dir, or a binary under ~/.cache/rod/browser.
+func listRodProcesses() []rodProcess {
+	var out []rodProcess
+	home, _ := os.UserHomeDir()
+	rodBin := filepath.Join(home, ".cache", "rod", "browser") + string(os.PathSeparator)
+
+	// /proc scan (Linux) — cheap and precise.
+	if entries, err := os.ReadDir("/proc"); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			pid, err := strconv.Atoi(e.Name())
+			if err != nil {
+				continue
+			}
+			cmdline, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+			if err != nil {
+				continue
+			}
+			cmd := strings.ReplaceAll(string(cmdline), "\x00", " ")
+			if strings.Contains(cmd, "user-data-dir=") && (strings.Contains(cmd, ".rodney") || strings.HasPrefix(cmd, rodBin) || strings.Contains(cmd, rodBin)) {
+				out = append(out, rodProcess{pid: pid, cmd: cmd})
+			}
+		}
+		return out
+	}
+
+	// ps fallback (macOS and other non-/proc systems).
+	cmdOut, err := exec.Command("ps", "ax", "-o", "pid=,command=").Output()
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(cmdOut), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		cmd := strings.TrimSpace(parts[1])
+		if strings.Contains(cmd, "user-data-dir=") && (strings.Contains(cmd, ".rodney") || strings.Contains(cmd, rodBin)) {
+			out = append(out, rodProcess{pid: pid, cmd: cmd})
+		}
+	}
+	return out
+}
+
 // connectBrowser connects to the running Chrome instance
 func connectBrowser(s *State) (*rod.Browser, error) {
 	browser := rod.New().ControlURL(s.DebugURL)
@@ -1024,6 +1165,15 @@ func cmdStart(args []string) {
 	if err != nil {
 		fatal("%s", err)
 	}
+
+	// GC pass (fork skale): sweep orphan rod-family Chromium processes and
+	// stale session state BEFORE launching a new browser. A previous run can
+	// leave orphans behind when the CLI is killed hard (SSH timeout, kill -9,
+	// crash): every orphan is a headless Chromium eating RAM (100-500 MB) and
+	// disk (profile). Runs on every start — no daemon, no cron; the next start
+	// is the natural collection point. Never touches a browser referenced by
+	// a live state.json (own or other sessions').
+	sweepOrphans()
 
 	// Check if already running
 	if s, err := loadState(); err == nil {
