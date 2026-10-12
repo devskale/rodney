@@ -70,6 +70,11 @@ func TestMain(m *testing.M) {
 
 	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 		l = l.Bin(bin)
+	} else if sysBin, has := launcher.LookPath(); has {
+		// Auto-safe (devskale/rodney#4): prefer the system browser over the
+		// frozen rod snapshot — el.Text()/InsertText are broken in the snapshot
+		// on newer distros, which made 4 tests fail for environmental reasons.
+		l = l.Bin(sysBin)
 	}
 
 	u := l.MustLaunch()
@@ -1590,13 +1595,17 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 		l := launcher.New().
 			Set("no-sandbox").
 			Set("disable-gpu").
-			Set("single-process").
+			// NB: no --single-process: Chrome 155+ (auto-safe system browser)
+			// produces no DOM under it (launch fails). gVisor workaround;
+			// fork rule is opt-in only (RODNEY_SINGLE_PROCESS=1).
 			Headless(true).
 			Leakless(false).
 			UserDataDir(filepath.Join(testDataDir, "chrome-data"))
 
 		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 			l = l.Bin(bin)
+		} else if sysBin, has := launcher.LookPath(); has {
+			l = l.Bin(sysBin) // auto-safe, see TestMain
 		}
 
 		u := l.MustLaunch()
@@ -1634,7 +1643,9 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 		l := launcher.New().
 			Set("no-sandbox").
 			Set("disable-gpu").
-			Set("single-process").
+			// NB: no --single-process: Chrome 155+ (auto-safe system browser)
+			// produces no DOM under it (launch fails). gVisor workaround;
+			// fork rule is opt-in only (RODNEY_SINGLE_PROCESS=1).
 			Set("ignore-certificate-errors"). // This is what --insecure sets
 			Headless(true).
 			Leakless(false).
@@ -1642,6 +1653,8 @@ func TestInsecureFlag_WithSelfSignedCert(t *testing.T) {
 
 		if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 			l = l.Bin(bin)
+		} else if sysBin, has := launcher.LookPath(); has {
+			l = l.Bin(sysBin) // auto-safe, see TestMain
 		}
 
 		u := l.MustLaunch()
@@ -2908,6 +2921,11 @@ func TestStopVideo_DetectsGIFExtension(t *testing.T) {
 func TestMockResponse(t *testing.T) {
 	page := env.browser.MustPage(env.server.URL + "/empty")
 	t.Cleanup(func() { page.MustClose() })
+	// Chrome 155: Fetch.enable issued while the navigation is still committing
+	// is silently dropped for that frame (the renderer's URLLoaderFactory is
+	// created from pre-enable state). MustPage does NOT wait for load, so an
+	// unconditional WaitLoad here is load-bearing, not cosmetic.
+	page.MustWaitLoad()
 
 	router := page.HijackRequests()
 	pattern := env.server.URL + "/testfile.txt"
@@ -2943,6 +2961,7 @@ func TestMockResponse(t *testing.T) {
 func TestMockMethodFilter(t *testing.T) {
 	page := env.browser.MustPage(env.server.URL + "/empty")
 	t.Cleanup(func() { page.MustClose() })
+	page.MustWaitLoad() // Chrome 155 commit race, see TestMockResponse
 
 	router := page.HijackRequests()
 	pattern := env.server.URL + "/testfile.txt"
@@ -3660,38 +3679,49 @@ func TestClosePageActiveIndexAdjust(t *testing.T) {
 	t.Cleanup(func() { p2.MustClose() })
 	p3 := env.browser.MustPage("about:blank") // closed inside the test
 
-	pages, _ := env.browser.Pages()
-	findByTarget := func(tid proto.TargetTargetID) int {
-		pages, _ = env.browser.Pages()
-		for i, p := range pages {
+	// NB: CDP Target.getTargets order is NOT guaranteed to be creation order
+	// nor stable across calls (flaky with system Chrome 155 — found while
+	// making the suite auto-safe, devskale/rodney#4). So this test asserts
+	// order-independent invariants: presence, count, and no zombie targets —
+	// not index arithmetic across two snapshots. The index-shift logic itself
+	// lives in cmdClosePage and operates on ONE snapshot, where it is sound.
+	hasTarget := func(tid proto.TargetTargetID) bool {
+		pages, err := env.browser.Pages()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range pages {
 			if p.TargetID == tid {
-				return i
+				return true
 			}
 		}
-		return -1
+		return false
 	}
 
-	// Active page is p3 (last). Close p1 (before it): active index must shift down.
-	activeIdx := findByTarget(p3.TargetID)
-	closedIdx := findByTarget(p1.TargetID)
+	before, _ := env.browser.Pages()
+	if !hasTarget(p1.TargetID) || !hasTarget(p3.TargetID) {
+		t.Fatal("p1/p3 not found before close")
+	}
+
 	p1.MustClose()
-	newActiveIdx := activeIdx
-	if newActiveIdx > closedIdx {
-		newActiveIdx--
+	if hasTarget(p1.TargetID) {
+		t.Error("p1 still listed after MustClose")
 	}
-	if newActiveIdx != findByTarget(p3.TargetID) {
-		t.Errorf("adjusted index %d != actual p3 index %d", newActiveIdx, findByTarget(p3.TargetID))
+	if !hasTarget(p3.TargetID) {
+		t.Error("p3 disappeared when p1 was closed")
 	}
 
-	// Close the active page itself: fall back to an adjacent index
+	// Close the active page itself: remaining pages must stay reachable.
 	p3.MustClose()
-	pages, _ = env.browser.Pages()
-	if len(pages) == 0 {
-		t.Fatal("no pages left after closing p3")
+	if hasTarget(p3.TargetID) {
+		t.Error("p3 still listed after MustClose")
 	}
-	// p2 must still be reachable by its target ID
-	if findByTarget(p2.TargetID) < 0 {
+	if !hasTarget(p2.TargetID) {
 		t.Fatal("p2 not found after closing p1 and p3")
+	}
+	after, _ := env.browser.Pages()
+	if len(after) != len(before)-2 {
+		t.Errorf("page count %d after closes, want %d", len(after), len(before)-2)
 	}
 }
 

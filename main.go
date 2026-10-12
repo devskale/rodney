@@ -42,7 +42,7 @@ var helpText string
 // version is the devskale fork version. Overridable via -ldflags "-X main.version=..."
 // for tagged releases, but the default keeps fork builds distinguishable from
 // upstream (which reports plain "dev").
-var version = "0.11.3" // devskale fork
+var version = "0.12.0" // devskale fork
 
 // scopeMode determines whether to use a local or global state directory.
 type scopeMode int
@@ -1326,8 +1326,16 @@ func cmdStart(args []string) {
 		l = l.Delete("no-startup-window")
 	}
 
+	// Browser selection (auto-safe): ROD_CHROME_BIN wins; otherwise prefer a
+	// locally installed Chrome/Chromium over rod's downloaded snapshot. The
+	// rod-managed chromium-1321438 is a frozen 2024 ToT dev snapshot that is
+	// partially broken on newer distros (el.Text() returns "", InsertText
+	// never lands — devskale/rodney#4). A system browser is always newer and
+	// more compatible, so it goes first; the snapshot stays the last resort.
 	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 		l = l.Bin(bin)
+	} else if sysBin, has := launcher.LookPath(); has {
+		l = l.Bin(sysBin)
 	}
 
 	// Detect authenticated proxy and launch helper if needed
@@ -6066,7 +6074,7 @@ func cmdDoctor(args []string) {
 
 	check("version", version, true)
 
-	// Chrome detection: ROD_CHROME_BIN or rod-managed chromium
+	// Chrome detection: ROD_CHROME_BIN > system browser (LookPath) > rod snapshot
 	if bin := os.Getenv("ROD_CHROME_BIN"); bin != "" {
 		if _, err := os.Stat(bin); err == nil {
 			check("chrome", bin+" (ROD_CHROME_BIN)", true)
@@ -6074,7 +6082,13 @@ func cmdDoctor(args []string) {
 			check("chrome", bin+" not found (ROD_CHROME_BIN)", false)
 		}
 	} else if path, has := launcher.LookPath(); has {
-		check("chrome", path+" (rod-managed)", true)
+		check("chrome", path+" (system browser — preferred over rod snapshot)", true)
+	} else if snapBin := launcher.New().Get("bin"); snapBin != "" {
+		if _, err := os.Stat(snapBin); err == nil {
+			check("chrome", "rod-managed snapshot (frozen 2024 ToT — partially broken on newer distros, devskale/rodney#4)", true)
+		} else {
+			check("chrome", "not found — set ROD_CHROME_BIN or run any command once (rod downloads chromium)", false)
+		}
 	} else {
 		check("chrome", "not found — set ROD_CHROME_BIN or run any command once (rod downloads chromium)", false)
 	}

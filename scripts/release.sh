@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 echo "── Building $TAG locally (cross-compile, zero CI minutes) ──"
 rm -rf dist && mkdir -p dist
 
-for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
     GOOS="${target%/*}"; GOARCH="${target#*/}"
     out="dist/rodney-$GOOS-$GOARCH"
     mkdir -p "$out"
@@ -23,7 +23,13 @@ for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
     GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
         go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
         -o "$out/rodney" .
-    tar -C "$out" -czf "dist/rodney-$GOOS-$GOARCH.tar.gz" rodney
+    if [ "$GOOS" = "windows" ]; then
+        # zip keeps the .exe extension meaningful on Windows; tar.gz would strip
+        # the executable bit context (Windows ignores it) and confuse unzip flows
+        (cd "$out" && mv rodney rodney.exe && zip -q "../rodney-$GOOS-$GOARCH.zip" rodney.exe)
+    else
+        tar -C "$out" -czf "dist/rodney-$GOOS-$GOARCH.tar.gz" rodney
+    fi
 done
 
 # sanity: the native binary reports the right version
@@ -36,10 +42,10 @@ echo "── Sanity: $BIN --version ──"
 echo "── Creating release $TAG ──"
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     echo "  release exists — uploading assets to it"
-    gh release upload "$TAG" dist/*.tar.gz --repo "$REPO" --clobber
+    gh release upload "$TAG" dist/*.tar.gz dist/*.zip --repo "$REPO" --clobber
 else
     gh release create "$TAG" --repo "$REPO" --title "$TAG" \
-        --generate-notes dist/*.tar.gz
+        --generate-notes dist/*.tar.gz dist/*.zip
 fi
 
 echo "── Done: https://github.com/$REPO/releases/tag/$TAG ──"
