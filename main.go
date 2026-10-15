@@ -42,7 +42,7 @@ var helpText string
 // version is the devskale fork version. Overridable via -ldflags "-X main.version=..."
 // for tagged releases, but the default keeps fork builds distinguishable from
 // upstream (which reports plain "dev").
-var version = "0.12.0" // devskale fork
+var version = "0.12.1" // devskale fork
 
 // scopeMode determines whether to use a local or global state directory.
 type scopeMode int
@@ -1526,6 +1526,18 @@ func cmdStatus(args []string) {
 	}
 }
 
+// isSchemelessSpecialURL reports whether u is a special browser URL that
+// already carries its own scheme without "://" (about:blank, chrome://settings
+// has one) — these must never get an http:// prefix.
+func isSchemelessSpecialURL(u string) bool {
+	for _, p := range []string{"about:", "data:", "blob:", "javascript:"} {
+		if strings.HasPrefix(u, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // normalizeURL strips a single trailing slash (but keeps root "/") so
 // example.com == example.com/ for --reuse matching.
 func normalizeURL(u string) string {
@@ -1580,8 +1592,10 @@ func cmdOpen(args []string) {
 			fatal("unknown flag: %s (open <url> [--reuse])", a)
 		}
 	}
-	// Add scheme if missing
-	if !strings.Contains(url, "://") {
+	// Add scheme if missing — but leave scheme-less special URLs (about:,
+	// chrome://, data:, file:// has one) alone: prefixing about:blank with
+	// http:// produced an invalid URL (fork fix, panicked before v0.12.1)
+	if !strings.Contains(url, "://") && !isSchemelessSpecialURL(url) {
 		url = "http://" + url
 	}
 
@@ -1631,7 +1645,10 @@ func cmdOpen(args []string) {
 	pages, _ := browser.Pages()
 	var page *rod.Page
 	if len(pages) == 0 {
-		page = browser.MustPage(url)
+		page, err = browser.Page(proto.TargetCreateTarget{URL: url})
+		if err != nil {
+			fatal("%v", err)
+		}
 		s.ActivePage = 0
 		saveState(s)
 	} else {
@@ -1643,7 +1660,7 @@ func cmdOpen(args []string) {
 		// BEFORE the navigation so they run on the new document)
 		applySessionOverrides(s, page)
 		if err := page.Navigate(url); err != nil {
-			fatal("navigation failed: %v", err)
+			fatal("%v", err)
 		}
 	}
 	// Start video capture if recording is active
@@ -3404,17 +3421,23 @@ func cmdNewPage(args []string) {
 	url := ""
 	if len(args) > 0 {
 		url = args[0]
-		if !strings.Contains(url, "://") {
+		if !strings.Contains(url, "://") && !isSchemelessSpecialURL(url) {
 			url = "http://" + url
 		}
 	}
 
 	var page *rod.Page
 	if url != "" {
-		page = browser.MustPage(url)
+		page, err = browser.Page(proto.TargetCreateTarget{URL: url})
+		if err != nil {
+			fatal("%v", err)
+		}
 		page.MustWaitLoad()
 	} else {
-		page = browser.MustPage("")
+		page, err = browser.Page(proto.TargetCreateTarget{})
+		if err != nil {
+			fatal("failed to create page: %v", err)
+		}
 	}
 
 	// Switch active to the new page

@@ -4662,3 +4662,29 @@ func TestState_OlderStateWithoutStartedAtStillLoads(t *testing.T) {
 		t.Error("legacy state (unknown age) must never be swept by age")
 	}
 }
+
+// --- scheme handling in open/newpage (fork fix v0.12.1) ---
+// about:blank used to get an http:// prefix ("http://about:blank") and the
+// navigation died with a bare Go panic from MustPage. isSchemelessSpecialURL
+// guards the prefix; the helper is pure, so this is a unit test.
+
+func TestIsSchemelessSpecialURL(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"about:blank", true},
+		{"data:text/html,<h1>x</h1>", true},
+		{"blob:https://x/y", true},
+		{"javascript:1", true},
+		{"example.com", false},         // bare host — needs the prefix
+		{"https://example.com", false}, // already has a scheme
+		{"http://about:blank", false},  // already prefixed (caller's choice)
+		{"", false},
+	}
+	for _, tc := range tests {
+		if got := isSchemelessSpecialURL(tc.in); got != tc.want {
+			t.Errorf("isSchemelessSpecialURL(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
