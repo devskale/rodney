@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"image/gif"
 	"io"
@@ -4686,5 +4687,188 @@ func TestIsSchemelessSpecialURL(t *testing.T) {
 		if got := isSchemelessSpecialURL(tc.in); got != tc.want {
 			t.Errorf("isSchemelessSpecialURL(%q) = %v, want %v", tc.in, got, tc.want)
 		}
+	}
+}
+
+// --- issue #5: non-interactive (no TTY) live mode must refuse, not hang ---
+
+func TestRequireTTYOrTimeout_TTYPasses(t *testing.T) {
+	for _, cmd := range []string{"console", "requests", "mock", "block"} {
+		if err := requireTTYOrTimeout(cmd, 0, true); err != nil {
+			t.Errorf("%s with TTY, no timeout: expected nil, got %v", cmd, err)
+		}
+	}
+}
+
+func TestRequireTTYOrTimeout_TimeoutOptsIn(t *testing.T) {
+	// An explicit --timeout makes non-interactive use legitimate: the command
+	// bounds itself, so no TTY is needed to interrupt it.
+	for _, cmd := range []string{"console", "requests", "mock", "block"} {
+		if err := requireTTYOrTimeout(cmd, 5*time.Second, false); err != nil {
+			t.Errorf("%s without TTY but --timeout 5s: expected nil, got %v", cmd, err)
+		}
+	}
+}
+
+func TestRequireTTYOrTimeout_NoTTYNoTimeoutRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		cmd      string
+		contains []string
+	}{
+		{"console", []string{"no TTY", "--timeout", "console-start", "--clear"}},
+		{"requests", []string{"no TTY", "--timeout", "requests-start"}},
+		{"mock", []string{"no TTY", "--timeout"}},
+		{"block", []string{"no TTY", "--timeout"}},
+	} {
+		err := requireTTYOrTimeout(tc.cmd, 0, false)
+		if err == nil {
+			t.Errorf("%s without TTY and no timeout: expected error, got nil", tc.cmd)
+			continue
+		}
+		for _, want := range tc.contains {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s error %q missing %q", tc.cmd, err.Error(), want)
+			}
+		}
+	}
+	// The console/requests hint must point at the matching -start command.
+	if err := requireTTYOrTimeout("console", 0, false); err != nil {
+		if strings.Contains(err.Error(), "requests-start") {
+			t.Errorf("console hint should mention console-start, got %q", err.Error())
+		}
+	}
+}
+
+func TestParseTimeoutSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		in         string
+		want       time.Duration
+		wantErrPat string
+	}{
+		{"30", 30 * time.Second, ""},
+		{"1", time.Second, ""},
+		{"0", 0, "positive"},
+		{"-5", 0, "positive"},
+		{"abc", 0, "positive"},
+		{"1.5", 0, "positive"},
+	} {
+		got, err := parseTimeoutSeconds(tc.in)
+		if tc.wantErrPat == "" {
+			if err != nil || got != tc.want {
+				t.Errorf("parseTimeoutSeconds(%q) = %v, %v; want %v, nil", tc.in, got, err, tc.want)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), tc.wantErrPat) {
+			t.Errorf("parseTimeoutSeconds(%q) err = %v; want error containing %q", tc.in, err, tc.wantErrPat)
+		}
+	}
+}
+
+func TestTimeoutAfter(t *testing.T) {
+	// Unbounded (timeout <= 0) must return a nil channel — receiving from it
+	// blocks forever, preserving the interactive Ctrl+C behaviour.
+	if ch := timeoutAfter(0); ch != nil {
+		t.Errorf("timeoutAfter(0) = %v, want nil", ch)
+	}
+	if ch := timeoutAfter(-time.Second); ch != nil {
+		t.Errorf("timeoutAfter(-1s) = %v, want nil", ch)
+	}
+	// A positive timeout must return a channel that fires (blocking receive
+	// returns after ~50ms).
+	done := time.Now()
+	<-timeoutAfter(50 * time.Millisecond)
+	if elapsed := time.Since(done); elapsed < 40*time.Millisecond {
+		t.Errorf("timeoutAfter(50ms) fired after %v, want >= ~50ms", elapsed)
+	}
+}
+
+// --- flags anywhere in mock/block args (previously silently ignored after positionals) ---
+
+func TestParseFlagSetAnywhere_FlagsAfterPositionals(t *testing.T) {
+	fs := flag.NewFlagSet("block", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	method := fs.String("method", "", "")
+	timeoutSecs := fs.Int("timeout", 0, "")
+	pos, err := parseFlagSetAnywhere(fs, []string{"*/api/*", "--method", "GET", "--timeout", "30"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pos) != 1 || pos[0] != "*/api/*" {
+		t.Errorf("positionals = %v, want [*/api/*]", pos)
+	}
+	if *method != "GET" || *timeoutSecs != 30 {
+		t.Errorf("method=%q timeout=%d, want GET/30 — flags after positionals must parse", *method, *timeoutSecs)
+	}
+}
+
+func TestParseFlagSetAnywhere_FlagsBeforePositionals(t *testing.T) {
+	fs := flag.NewFlagSet("mock", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	status := fs.Int("status", 200, "")
+	pos, err := parseFlagSetAnywhere(fs, []string{"--status", "404", "pat", "body"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *status != 404 {
+		t.Errorf("status = %d, want 404", *status)
+	}
+	if len(pos) != 2 || pos[0] != "pat" || pos[1] != "body" {
+		t.Errorf("positionals = %v, want [pat body]", pos)
+	}
+}
+
+func TestParseFlagSetAnywhere_EqualsForm(t *testing.T) {
+	fs := flag.NewFlagSet("block", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	timeoutSecs := fs.Int("timeout", 0, "")
+	pos, err := parseFlagSetAnywhere(fs, []string{"pat", "--timeout=7"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *timeoutSecs != 7 {
+		t.Errorf("timeout = %d, want 7", *timeoutSecs)
+	}
+	if len(pos) != 1 || pos[0] != "pat" {
+		t.Errorf("positionals = %v, want [pat]", pos)
+	}
+}
+
+func TestParseFlagSetAnywhere_NegativeValue(t *testing.T) {
+	fs := flag.NewFlagSet("block", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	timeoutSecs := fs.Int("timeout", 0, "")
+	pos, err := parseFlagSetAnywhere(fs, []string{"pat", "--timeout", "-3"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *timeoutSecs != -3 {
+		t.Errorf("timeout = %d, want -3 (validation happens in the caller)", *timeoutSecs)
+	}
+	if len(pos) != 1 {
+		t.Errorf("positionals = %v, want [pat]", pos)
+	}
+}
+
+func TestParseFlagSetAnywhere_UnknownFlag(t *testing.T) {
+	fs := flag.NewFlagSet("block", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	_, err := parseFlagSetAnywhere(fs, []string{"pat", "--bogus"})
+	if err == nil {
+		t.Errorf("unknown flag after positional: expected error, got nil (was silently treated as positional before)")
+	}
+}
+
+func TestParseFlagSetAnywhere_DoubleDashSeparator(t *testing.T) {
+	fs := flag.NewFlagSet("mock", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	timeoutSecs := fs.Int("timeout", 0, "")
+	pos, err := parseFlagSetAnywhere(fs, []string{"--timeout", "5", "--", "--not-a-flag", "body"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *timeoutSecs != 5 {
+		t.Errorf("timeout = %d, want 5", *timeoutSecs)
+	}
+	if len(pos) != 2 || pos[0] != "--not-a-flag" || pos[1] != "body" {
+		t.Errorf("positionals = %v, want [--not-a-flag body]", pos)
 	}
 }

@@ -492,13 +492,13 @@ var commandUsage = map[string]string{
 	"cookie-get":     "rodney cookie-get [name] [--json]",
 	"cookie-delete":  "rodney cookie-delete <name> [--domain d] [--url u] [--path p]",
 	"cookie-clear":   "rodney cookie-clear [--domain <domain>]",
-	"mock":           "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
-	"block":          "rodney block <pattern> [--method M]",
-	"console":        "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
+	"mock":           "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M] [--timeout S]",
+	"block":          "rodney block <pattern> [--method M] [--timeout S]",
+	"console":        "rodney console [--level L] [--json] [--browser] [--follow] [--clear] [--timeout S]",
 	"console-start":  "rodney console-start",
 	"console-stop":   "rodney console-stop",
 	"dialog":         "rodney dialog [--dismiss] [--text MSG] [--json]",
-	"requests":       "rodney requests [--json] [--follow] [--clear]",
+	"requests":       "rodney requests [--json] [--follow] [--clear] [--timeout S]",
 	"requests-start": "rodney requests-start",
 	"requests-stop":  "rodney requests-stop",
 	"viewport":       "rodney viewport <width> <height> [--clear]",
@@ -685,17 +685,18 @@ var commandHelp = map[string]cmdHelpEntry{
 
 	// --- Network interception ---
 	"mock": {Group: "Network interception", Usage: "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
-		Desc:     "Serve a canned response for matching requests. Runs as a persistent foreground process — Ctrl+C to stop.",
-		Flags:    []string{"--status N    HTTP status (default 200)", "--type MIME   content type (default text/plain)", "--method M    restrict to HTTP method", "response '-' reads body from stdin"},
+		Desc:     "Serve a canned response for matching requests. Runs as a persistent foreground process — Ctrl+C or --timeout to stop.",
+		Flags:    []string{"--status N    HTTP status (default 200)", "--type MIME   content type (default text/plain)", "--method M    restrict to HTTP method", "--timeout S   auto-stop after S seconds (required when stdin is not a TTY)", "response '-' reads body from stdin"},
 		Examples: []string{"rodney mock '*api/users*' '{\"id\":1}' --type application/json"}},
-	"block": {Group: "Network interception", Usage: "rodney block <pattern> [--method M]",
+	"block": {Group: "Network interception", Usage: "rodney block <pattern> [--method M] [--timeout S]",
 		Desc:     "Fail matching requests client-side (offline behaviour). Persistent foreground process.",
+		Flags:    []string{"--method M    restrict to HTTP method", "--timeout S   auto-stop after S seconds (required when stdin is not a TTY)"},
 		Examples: []string{"rodney block '*.ads.*'"}},
 
 	// --- Console ---
-	"console": {Group: "Console", Usage: "rodney console [--level L] [--json] [--browser] [--follow] [--clear]",
-		Desc:     "Read console output. Without a background collector: live stream (Ctrl+C). With collector (console-start): print buffered messages.",
-		Flags:    []string{"--level L    filter: log, info, warn, error, debug", "--json       JSON lines output", "--browser    also browser-level log entries (network errors, security)", "--follow     print buffered, then tail live", "--clear      print and empty the buffer"},
+	"console": {Group: "Console", Usage: "rodney console [--level L] [--json] [--browser] [--follow] [--clear] [--timeout S]",
+		Desc:     "Read console output. Without a background collector: live stream (Ctrl+C or --timeout). With collector (console-start): print buffered messages.",
+		Flags:    []string{"--level L    filter: log, info, warn, error, debug", "--json       JSON lines output", "--browser    also browser-level log entries (network errors, security)", "--follow     print buffered, then tail live", "--clear      print and empty the buffer", "--timeout S  stop live/tail mode after S seconds (required when stdin is not a TTY)"},
 		Examples: []string{"rodney console --level error", "rodney console --json | jq 'select(.type==\"error\")'"}},
 	"console-start": {Group: "Console", Usage: "rodney console-start",
 		Desc: "Start the background console collector — captures console/browser logs between commands into console.jsonl.", Examples: []string{"rodney console-start"}},
@@ -703,9 +704,9 @@ var commandHelp = map[string]cmdHelpEntry{
 		Desc: "Stop the collector and remove the buffer.", Examples: []string{"rodney console-stop"}},
 
 	// --- Network requests ---
-	"requests": {Group: "Network requests", Usage: "rodney requests [--json] [--follow] [--clear]",
-		Desc:     "Read captured network requests. Without a background collector: live stream (Ctrl+C). With collector (requests-start): print buffered requests.",
-		Flags:    []string{"--json    JSON lines output", "--follow  print buffered, then tail live", "--clear   print and empty the buffer"},
+	"requests": {Group: "Network requests", Usage: "rodney requests [--json] [--follow] [--clear] [--timeout S]",
+		Desc:     "Read captured network requests. Without a background collector: live stream (Ctrl+C or --timeout). With collector (requests-start): print buffered requests.",
+		Flags:    []string{"--json    JSON lines output", "--follow  print buffered, then tail live", "--clear   print and empty the buffer", "--timeout S   stop live/tail mode after S seconds (required when stdin is not a TTY)"},
 		Examples: []string{"rodney requests", "rodney requests --json | jq 'select(.status>=400)'"}},
 	"requests-start": {Group: "Network requests", Usage: "rodney requests-start",
 		Desc: "Start the background request collector — captures all requests/responses between commands into requests.jsonl.", Examples: []string{"rodney requests-start"}},
@@ -873,6 +874,47 @@ func containsHelpFlag(args []string) bool {
 func fatal(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
 	os.Exit(2)
+}
+
+// parseFlagSetAnywhere parses args with fs, allowing flags anywhere — before
+// OR after positional arguments. The stdlib flag package stops at the first
+// positional, so the documented order `rodney block <pattern> --timeout S`
+// (flags last) silently ignored every flag — including --status/--method
+// before this fix, and --timeout now.
+// Returns the positional arguments.
+func parseFlagSetAnywhere(fs *flag.FlagSet, args []string) ([]string, error) {
+	var flags, positionals []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if len(a) > 1 && strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+			name := strings.TrimLeft(a, "-")
+			if strings.Contains(name, "=") {
+				continue // --flag=value carries its own value
+			}
+			// Non-boolean flags consume the following argument as their value —
+			// even if it looks like a number or another flag's name.
+			if f := fs.Lookup(name); f != nil {
+				if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+					continue
+				}
+				if i+1 < len(args) {
+					i++
+					flags = append(flags, args[i])
+				}
+			}
+			continue
+		}
+		positionals = append(positionals, a)
+	}
+	if err := fs.Parse(flags); err != nil {
+		return nil, err
+	}
+	return positionals, nil
 }
 
 // findUnknownFlag returns the first arg not registered in fs, preserving original form (e.g. --bogus).
@@ -2203,16 +2245,25 @@ func cmdMock(args []string) {
 	status := fs.Int("status", 200, "")
 	contentType := fs.String("type", "text/plain", "")
 	method := fs.String("method", "", "")
+	timeoutSecs := fs.Int("timeout", 0, "")
 
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagSetAnywhere(fs, args)
+	if err != nil {
 		fatal("%v", err)
 	}
-	rest := fs.Args()
 	if len(rest) < 2 {
-		fatal("usage: rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]")
+		fatal("usage: rodney mock <pattern> <response> [--status N] [--type MIME] [--method M] [--timeout S]")
 	}
 	pattern := rest[0]
 	body := rest[1]
+
+	if *timeoutSecs < 0 {
+		fatal("--timeout requires a positive number of seconds")
+	}
+	timeout := time.Duration(*timeoutSecs) * time.Second
+	if err := requireTTYOrTimeout("mock", timeout, stdinIsTerminal()); err != nil {
+		fatal("%v", err)
+	}
 
 	if strings.HasPrefix(body, "-file=") {
 		data, err := os.ReadFile(strings.TrimPrefix(body, "-file="))
@@ -2236,15 +2287,25 @@ func cmdMock(args []string) {
 		fatal("failed to install mock: %v", err)
 	}
 
-	router.Run()
+	// Run() blocks until the router stops (it pumps the Fetch event loop),
+	// so drive it in a goroutine and keep the main flow for the wait below.
+	go router.Run()
 	defer func() { _ = router.Stop() }()
 
-	fmt.Printf("Mocking %s -> %d %s (Ctrl+C to stop)\n", pattern, *status, *contentType)
+	if timeout > 0 {
+		fmt.Printf("Mocking %s -> %d %s (Ctrl+C to stop, or %ds timeout)\n", pattern, *status, *contentType, *timeoutSecs)
+	} else {
+		fmt.Printf("Mocking %s -> %d %s (Ctrl+C to stop)\n", pattern, *status, *contentType)
+	}
 
-	// Keep the router alive until interrupted.
+	// Keep the router alive until interrupted or --timeout elapses.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
+	select {
+	case <-sig:
+	case <-timeoutAfter(timeout):
+		fmt.Fprintln(os.Stderr, "(--timeout reached — mock removed)")
+	}
 }
 
 // cmdBlock intercepts requests matching a URL pattern and fails them client-
@@ -2258,15 +2319,24 @@ func cmdBlock(args []string) {
 	fs := flag.NewFlagSet("block", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	method := fs.String("method", "", "")
+	timeoutSecs := fs.Int("timeout", 0, "")
 
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagSetAnywhere(fs, args)
+	if err != nil {
 		fatal("%v", err)
 	}
-	rest := fs.Args()
 	if len(rest) < 1 {
-		fatal("usage: rodney block <pattern> [--method M]")
+		fatal("usage: rodney block <pattern> [--method M] [--timeout S]")
 	}
 	pattern := rest[0]
+
+	if *timeoutSecs < 0 {
+		fatal("--timeout requires a positive number of seconds")
+	}
+	timeout := time.Duration(*timeoutSecs) * time.Second
+	if err := requireTTYOrTimeout("block", timeout, stdinIsTerminal()); err != nil {
+		fatal("%v", err)
+	}
 
 	_, _, page := withPage()
 	router := page.HijackRequests()
@@ -2281,14 +2351,25 @@ func cmdBlock(args []string) {
 		fatal("failed to install blocker: %v", err)
 	}
 
-	router.Run()
+	// Run() blocks until the router stops (it pumps the Fetch event loop),
+	// so drive it in a goroutine and keep the main flow for the wait below.
+	go router.Run()
 	defer func() { _ = router.Stop() }()
 
-	fmt.Printf("Blocking %s (Ctrl+C to stop)\n", pattern)
+	if timeout > 0 {
+		fmt.Printf("Blocking %s (Ctrl+C to stop, or %ds timeout)\n", pattern, *timeoutSecs)
+	} else {
+		fmt.Printf("Blocking %s (Ctrl+C to stop)\n", pattern)
+	}
 
+	// Keep the router alive until interrupted or --timeout elapses.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
+	select {
+	case <-sig:
+	case <-timeoutAfter(timeout):
+		fmt.Fprintln(os.Stderr, "(--timeout reached — blocker removed)")
+	}
 }
 
 // mimeToExt returns a file extension for common MIME types.
@@ -4656,8 +4737,9 @@ func consoleEntryFromBrowserEvent(e *proto.LogEntryAdded) consoleEntry {
 }
 
 // streamConsoleEvents subscribes to console events on the given page and prints
-// them (filtered) until the process is interrupted. Blocking.
-func streamConsoleEvents(page *rod.Page, level string, asJSON, includeBrowser bool) {
+// them (filtered) until the process is interrupted or --timeout elapses.
+// Blocking (indefinitely when timeout <= 0).
+func streamConsoleEvents(page *rod.Page, level string, asJSON, includeBrowser bool, timeout time.Duration) {
 	// Buffer output so prints from the event goroutine don't interleave.
 	var mu sync.Mutex
 	printEntry := func(e consoleEntry) {
@@ -4669,11 +4751,16 @@ func streamConsoleEvents(page *rod.Page, level string, asJSON, includeBrowser bo
 		mu.Unlock()
 	}
 
-	// EachEvent blocks until the returned wait func returns; we run until SIGINT.
+	// EachEvent blocks until the returned wait func returns; we run until SIGINT
+	// or --timeout (if set).
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
+		select {
+		case <-sig:
+		case <-timeoutAfter(timeout):
+			fmt.Fprintln(os.Stderr, "(--timeout reached — stopping console stream)")
+		}
 		os.Exit(0)
 	}()
 
@@ -4739,6 +4826,7 @@ func collectorRunning(pid int) bool {
 func cmdConsole(args []string) {
 	var level string
 	var asJSON, includeBrowser, follow, clear bool
+	var timeout time.Duration
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--level":
@@ -4750,6 +4838,16 @@ func cmdConsole(args []string) {
 			if _, _, err := parseConsoleLevel(level); err != nil {
 				fatal("%v", err)
 			}
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				fatal("--timeout requires a value (seconds)")
+			}
+			var err error
+			timeout, err = parseTimeoutSeconds(args[i])
+			if err != nil {
+				fatal("%v", err)
+			}
 		case "--json":
 			asJSON = true
 		case "--browser":
@@ -4759,13 +4857,21 @@ func cmdConsole(args []string) {
 		case "--clear":
 			clear = true
 		default:
-			fatal("unknown flag: %s\nusage: rodney console [--level L] [--json] [--browser] [--follow] [--clear]", args[i])
+			fatal("unknown flag: %s\nusage: rodney console [--level L] [--json] [--browser] [--follow] [--clear] [--timeout S]", args[i])
 		}
 	}
 
 	s, err := loadState()
 	if err != nil {
 		fatal("%v", err)
+	}
+
+	// Live streaming and --follow tailing block until Ctrl+C; without a TTY
+	// nothing can ever interrupt them (issue #5) — require --timeout there.
+	if !collectorRunning(s.ConsolePID) || follow {
+		if err := requireTTYOrTimeout("console", timeout, stdinIsTerminal()); err != nil {
+			fatal("%v", err)
+		}
 	}
 
 	// Phase 2: collector running -> read buffer (unless --follow streams live too)
@@ -4781,7 +4887,7 @@ func cmdConsole(args []string) {
 			return
 		}
 		// --follow: print buffered, then tail for new lines
-		tailConsoleBuffer(s.ConsoleLog, level, asJSON, includeBrowser)
+		tailConsoleBuffer(s.ConsoleLog, level, asJSON, includeBrowser, timeout)
 		return
 	}
 
@@ -4795,11 +4901,48 @@ func cmdConsole(args []string) {
 		fatal("%v", err)
 	}
 	fmt.Fprintln(os.Stderr, "(streaming console — Ctrl+C to stop; use console-start for a background buffer)")
-	streamConsoleEvents(page, level, asJSON, includeBrowser)
+	streamConsoleEvents(page, level, asJSON, includeBrowser, timeout)
+}
+
+// parseTimeoutSeconds parses a --timeout value in whole seconds. Zero and
+// negative values are rejected: 0 would silently mean "run forever", which
+// is exactly the behaviour the flag exists to prevent (issue #5).
+func parseTimeoutSeconds(s string) (time.Duration, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("--timeout requires a positive number of seconds, got %q", s)
+	}
+	return time.Duration(n) * time.Second, nil
+}
+
+// requireTTYOrTimeout guards commands that persist until Ctrl+C (live
+// console/request streams, mock, block). When stdin is not a TTY nothing can
+// ever interrupt them — one such call hung an agent session for 27 minutes
+// (issue #5). An explicit --timeout opts in to a bounded non-interactive run.
+func requireTTYOrTimeout(cmd string, timeout time.Duration, stdinIsTTY bool) error {
+	if timeout > 0 || stdinIsTTY {
+		return nil
+	}
+	if cmd == "console" || cmd == "requests" {
+		return fmt.Errorf("no TTY on stdin and no --timeout — rodney %s would stream until Ctrl+C with nothing able to stop it\n"+
+			"hint: run `rodney %s-start` and read with --clear, or pass --timeout <seconds>", cmd, cmd)
+	}
+	return fmt.Errorf("no TTY on stdin and no --timeout — rodney %s runs until Ctrl+C with nothing able to stop it\n"+
+		"hint: pass --timeout <seconds>", cmd)
+}
+
+// timeoutAfter returns a channel that fires after d, or nil when d <= 0. A
+// nil channel blocks forever, so unbounded (interactive) runs keep their
+// original behaviour.
+func timeoutAfter(d time.Duration) <-chan time.Time {
+	if d <= 0 {
+		return nil
+	}
+	return time.After(d)
 }
 
 // tailConsoleBuffer follows the JSONL file like tail -f and prints matching new entries.
-func tailConsoleBuffer(path, level string, asJSON, includeBrowser bool) {
+func tailConsoleBuffer(path, level string, asJSON, includeBrowser bool, timeout time.Duration) {
 	f, err := os.Open(path)
 	if err != nil {
 		fatal("failed to open console buffer: %v", err)
@@ -4812,7 +4955,11 @@ func tailConsoleBuffer(path, level string, asJSON, includeBrowser bool) {
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
+		select {
+		case <-sig:
+		case <-timeoutAfter(timeout):
+			fmt.Fprintln(os.Stderr, "(--timeout reached — stopping console tail)")
+		}
 		os.Exit(0)
 	}()
 	reader := bufio.NewReader(f)
@@ -5210,7 +5357,7 @@ func formatRequestPair(p requestPair) string {
 
 // streamRequestEvents subscribes to network events on the page and prints
 // paired request lines until interrupted. Blocking.
-func streamRequestEvents(page *rod.Page, asJSON bool) {
+func streamRequestEvents(page *rod.Page, asJSON bool, timeout time.Duration) {
 	var mu sync.Mutex
 	var pending map[string]requestEntry = map[string]requestEntry{}
 	printLine := func(line string) {
@@ -5221,7 +5368,11 @@ func streamRequestEvents(page *rod.Page, asJSON bool) {
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
+		select {
+		case <-sig:
+		case <-timeoutAfter(timeout):
+			fmt.Fprintln(os.Stderr, "(--timeout reached — stopping request stream)")
+		}
 		os.Exit(0)
 	}()
 	wait := page.EachEvent(
@@ -5306,21 +5457,40 @@ func readRequestBuffer(path string, asJSON bool) int {
 
 func cmdRequests(args []string) {
 	var asJSON, follow, clear bool
-	for _, a := range args {
-		switch a {
+	var timeout time.Duration
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
 		case "--json":
 			asJSON = true
 		case "--follow":
 			follow = true
 		case "--clear":
 			clear = true
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				fatal("--timeout requires a value (seconds)")
+			}
+			var err error
+			timeout, err = parseTimeoutSeconds(args[i])
+			if err != nil {
+				fatal("%v", err)
+			}
 		default:
-			fatal("unknown flag: %s\nusage: rodney requests [--json] [--follow] [--clear]", a)
+			fatal("unknown flag: %s\nusage: rodney requests [--json] [--follow] [--clear] [--timeout S]", args[i])
 		}
 	}
 	s, err := loadState()
 	if err != nil {
 		fatal("%v", err)
+	}
+
+	// Live streaming and --follow tailing block until Ctrl+C; without a TTY
+	// nothing can ever interrupt them (issue #5) — require --timeout there.
+	if !collectorRunning(s.RequestPID) || follow {
+		if err := requireTTYOrTimeout("requests", timeout, stdinIsTerminal()); err != nil {
+			fatal("%v", err)
+		}
 	}
 	if collectorRunning(s.RequestPID) && s.RequestLog != "" {
 		n := readRequestBuffer(s.RequestLog, asJSON)
@@ -5333,7 +5503,7 @@ func cmdRequests(args []string) {
 			}
 			return
 		}
-		tailRequestBuffer(s.RequestLog, asJSON)
+		tailRequestBuffer(s.RequestLog, asJSON, timeout)
 		return
 	}
 	browser, err := connectBrowser(s)
@@ -5345,11 +5515,11 @@ func cmdRequests(args []string) {
 		fatal("%v", err)
 	}
 	fmt.Fprintln(os.Stderr, "(streaming requests — Ctrl+C to stop; use requests-start for a background buffer)")
-	streamRequestEvents(page, asJSON)
+	streamRequestEvents(page, asJSON, timeout)
 }
 
 // tailRequestBuffer follows the JSONL file and prints paired new entries.
-func tailRequestBuffer(path string, asJSON bool) {
+func tailRequestBuffer(path string, asJSON bool, timeout time.Duration) {
 	f, err := os.Open(path)
 	if err != nil {
 		fatal("failed to open request buffer: %v", err)
@@ -5361,7 +5531,11 @@ func tailRequestBuffer(path string, asJSON bool) {
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
+		select {
+		case <-sig:
+		case <-timeoutAfter(timeout):
+			fmt.Fprintln(os.Stderr, "(--timeout reached — stopping request tail)")
+		}
 		os.Exit(0)
 	}()
 	reader := bufio.NewReader(f)

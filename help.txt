@@ -115,30 +115,41 @@ Emulation:
 
 Network interception:
   rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]
+                                    [--timeout S]
                                     Serve a canned response for matching
-                                    requests (persistent until Ctrl+C)
-  rodney block <pattern> [--method M]
+                                    requests (persistent until Ctrl+C or
+                                    --timeout; non-interactive callers must
+                                    pass --timeout)
+  rodney block <pattern> [--method M] [--timeout S]
                                     Fail matching requests client-side
-                                    (persistent until Ctrl+C)
+                                    (persistent until Ctrl+C or --timeout;
+                                    non-interactive callers must pass --timeout)
 
 Console:
   rodney console [--level L] [--json] [--browser] [--follow] [--clear]
+                                    [--timeout S]
                                     Show console output. Without a background
-                                    collector: live stream (Ctrl+C to stop).
-                                    With collector: print buffered messages.
+                                    collector: live stream (Ctrl+C or
+                                    --timeout). With collector: print buffered
+                                    messages.
                                     --level: log, info, warn, error, debug
                                     --json: JSON lines; --browser: also browser
                                     log entries; --follow: tail mode; --clear:
-                                    print and empty the buffer
+                                    print and empty the buffer; --timeout S:
+                                    stop streaming after S seconds (required
+                                    when stdin is not a TTY)
   rodney console-start             Start background console collector (captures
                                     logs between commands into console.jsonl)
   rodney console-stop              Stop collector and remove the buffer
 
 Network requests:
-  rodney requests [--json] [--follow] [--clear]
+  rodney requests [--json] [--follow] [--clear] [--timeout S]
                                     Read network requests. Without a background
-                                    collector: live stream (Ctrl+C). With
-                                    collector: paired request/status lines
+                                    collector: live stream (Ctrl+C or
+                                    --timeout). With collector: paired
+                                    request/status lines. Non-interactive
+                                    callers must pass --timeout for live/tail
+                                    mode
   rodney requests-start            Start background request collector
                                     (captures into requests.jsonl)
   rodney requests-stop             Stop collector and remove the buffer
