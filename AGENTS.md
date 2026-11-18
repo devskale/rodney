@@ -36,7 +36,7 @@ re-enable them. The local guardrail replaces them — **depth ladder, fast by de
   change without its test update broke the build once (extractScopeArgs); the
   fast guardrail tier does not compile tests, so run `--full` when signatures change.
 - Version lives in `main.go` (`var version`), set via `-ldflags` for releases.
-- Upstream: `origin` (simonw/rodney). This fork: `fork` remote, branch `skale`.
+- Upstream: `upstream` remote (simonw/rodney). This fork: `origin` (devskale/rodney), branch `skale`.
   Rebase on upstream occasionally; keep fork-specific changes minimal and
   clearly marked.
 

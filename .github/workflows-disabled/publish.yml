@@ -117,7 +117,7 @@ jobs:
           --description "Chrome automation from the command line" \
           --author 'Simon Willison' \
           --license Apache-2.0 \
-          --url https://github.com/simonw/rodney \
+          --url https://github.com/devskale/rodney \
           --set-version-var main.version \
           --version "$version"
     - name: Store the distribution packages

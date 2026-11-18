@@ -42,7 +42,7 @@ var helpText string
 // version is the devskale fork version. Overridable via -ldflags "-X main.version=..."
 // for tagged releases, but the default keeps fork builds distinguishable from
 // upstream (which reports plain "dev").
-var version = "0.12.1" // devskale fork
+var version = "0.13.0" // devskale fork
 
 // scopeMode determines whether to use a local or global state directory.
 type scopeMode int
@@ -684,7 +684,7 @@ var commandHelp = map[string]cmdHelpEntry{
 		Examples: []string{"rodney media --type print", "rodney media --feature prefers-color-scheme=dark"}},
 
 	// --- Network interception ---
-	"mock": {Group: "Network interception", Usage: "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M]",
+	"mock": {Group: "Network interception", Usage: "rodney mock <pattern> <response> [--status N] [--type MIME] [--method M] [--timeout S]",
 		Desc:     "Serve a canned response for matching requests. Runs as a persistent foreground process — Ctrl+C or --timeout to stop.",
 		Flags:    []string{"--status N    HTTP status (default 200)", "--type MIME   content type (default text/plain)", "--method M    restrict to HTTP method", "--timeout S   auto-stop after S seconds (required when stdin is not a TTY)", "response '-' reads body from stdin"},
 		Examples: []string{"rodney mock '*api/users*' '{\"id\":1}' --type application/json"}},
